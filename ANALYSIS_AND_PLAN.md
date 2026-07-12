@@ -1,9 +1,22 @@
 # Partner Product Management — Phân tích và kế hoạch phát triển hệ thống quản lý đối tác sản phẩm
 
-> **Trạng thái:** `IMPLEMENTED — MVP Phase A–E`
+> **Trạng thái:** `PARTIAL — SUPPLIER MANAGEMENT AND FINANCIAL FLOW HARDENED`
 >
-> Tài liệu phân tích và kế hoạch; đã triển khai source, migration V11, API, và 104 unit tests.
+> P0 product API defects fixed; checkout, refund, settlement, partner order idempotency, supplier bank account, member, and document APIs hardened through backend phases 1-10.
 > Repository được đối chiếu trực tiếp tại commit hiện tại. Base package thực tế là `com.yashmerino.ecommerce`.
+
+## 0. Current implementation update
+
+Completed backend hardening in this branch:
+
+- Flyway chain repaired: V16 now alters the existing `partner_order_commands` table instead of creating a duplicate; V17 makes `pending_settlement_adjustments` references nullable for residual debt entries.
+- Checkout SQL fixed: partner offer/product mismatch is rejected, `partner_sku` is snapshotted to `order_items`, and partner order aggregation is compatible with `ONLY_FULL_GROUP_BY`.
+- Discount allocation added: coupon and redeemed point value are allocated to order items, then rolled up to partner order `discount_allocation`.
+- Refund flow hardened: UNSETTLED partner orders now create carry-forward adjustments; loyalty reversal handles all earned lots idempotently.
+- Settlement calculation hardened: partner order claim uses pessimistic locking, period overlap is currency-scoped, and residual debt follows Policy B (payable never negative, remainder carried forward).
+- Partner order commands now require `Idempotency-Key` at controller/service level.
+- Supplier management MVP APIs added for bank accounts, partner members, and partner documents with membership/admin authorization.
+- CI added: `.github/workflows/backend-verify.yml` runs backend Maven tests and publishes Surefire reports.
 
 ## 1. Executive summary
 
