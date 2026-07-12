@@ -22,6 +22,7 @@ import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.annotation.DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import java.util.UUID;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -55,6 +56,7 @@ class RefundControllerTest {
         when(refundService.requestRefund(eq(1L), eq(1L), any(java.util.UUID.class), any(RefundRequestDTO.class))).thenReturn(refund);
 
         mvc.perform(post("/api/orders/1/refund")
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
                         .contentType(APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(dto)))
                 .andExpect(status().isCreated());

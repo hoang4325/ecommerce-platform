@@ -8,6 +8,7 @@ import com.yashmerino.ecommerce.repositories.OrderRepository;
 import com.yashmerino.ecommerce.repositories.PaymentRepository;
 import com.yashmerino.ecommerce.repositories.RefundRepository;
 import com.yashmerino.ecommerce.services.InboxService;
+import com.yashmerino.ecommerce.exceptions.ConflictException;
 import com.yashmerino.ecommerce.utils.OrderStatus;
 import com.yashmerino.ecommerce.utils.PaymentStatus;
 import jakarta.persistence.EntityNotFoundException;
@@ -19,6 +20,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.jdbc.core.JdbcTemplate;
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 @Component
 @RequiredArgsConstructor
@@ -92,63 +95,92 @@ public class RefundResultV2Consumer {
     private void applyFinancialAndLoyaltyReversal(Refund refund) {
         Long userId = jdbc.queryForObject("SELECT user_id FROM orders WHERE id=? FOR UPDATE", Long.class, refund.getOrderId());
         if (userId == null) return;
+
+        // Spend ledger (once per refund, not per-partner)
+        String spendKey = "spend:refund:" + refund.getId();
         jdbc.update("INSERT INTO spend_ledger(user_id,order_id,refund_id,amount,currency,transaction_type,external_reference,idempotency_key) VALUES (?,?,?, ?,?,'REFUND',?,?)",
-                userId, refund.getOrderId(), refund.getId(), refund.getAmount().negate(), refund.getCurrency(), refund.getExternalRefundId(), "spend:refund:" + refund.getId());
+                userId, refund.getOrderId(), refund.getId(), refund.getAmount().negate(), refund.getCurrency(), refund.getExternalRefundId(), spendKey);
 
         // PartnerOrder settlement reversal
-        // Load all DELIVERED partner orders for this order, with their settlement info
-        String carryForwardSql =
-            "INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,idempotency_key) " +
-            "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id";
-        String refundLineSql =
-            "INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
-            "VALUES (?,?,'REFUND',?,?,?,?,?,?,'Refund reversal',?) ON DUPLICATE KEY UPDATE id=id";
-        String updateSettlementSql =
-            "UPDATE settlements SET refund_amount=refund_amount+?,payable_amount=payable_amount-?,version=version+1 WHERE id=?";
+        // Query all financially-relevant statuses, not just DELIVERED
+        List<PartnerOrderRefundRow> partnerOrders = jdbc.query(
+                "SELECT po.id,po.partner_id,po.subtotal,po.commission_amount,po.partner_payable_amount," +
+                "       po.settlement_id,po.settlement_status,s.status AS set_status " +
+                "FROM partner_orders po LEFT JOIN settlements s ON s.id=po.settlement_id " +
+                "WHERE po.order_id=? AND po.status IN ('DELIVERED','RETURN_REQUESTED','RETURNED') FOR UPDATE",
+                (rs, n) -> new PartnerOrderRefundRow(
+                        rs.getLong("id"), rs.getLong("partner_id"),
+                        rs.getBigDecimal("subtotal"), rs.getBigDecimal("commission_amount"),
+                        rs.getBigDecimal("partner_payable_amount"),
+                        rs.getObject("settlement_id", Long.class),
+                        rs.getString("settlement_status"), rs.getString("set_status")),
+                refund.getOrderId());
 
-        jdbc.query("SELECT po.id,po.partner_id,po.subtotal,po.commission_amount,po.settlement_id,po.settlement_status,s.status AS set_status " +
-                    "FROM partner_orders po LEFT JOIN settlements s ON s.id=po.settlement_id " +
-                    "WHERE po.order_id=? AND po.status='DELIVERED' FOR UPDATE",
-                poRs -> {
-                    while (poRs.next()) {
-                        Long partnerOrderId = poRs.getLong("id");
-                        Long partnerId = poRs.getLong("partner_id");
-                        String settlementStatus = poRs.getString("settlement_status");
-                        String settlementState = poRs.getString("set_status");
+        if (partnerOrders.isEmpty()) return;
 
-                        String idempotencyKey = "REFUND:" + refund.getId() + ":" + partnerOrderId;
+        // Calculate total partner payable for proportional allocation
+        BigDecimal totalPayable = partnerOrders.stream()
+                .map(PartnerOrderRefundRow::partnerPayableAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalPayable.compareTo(BigDecimal.ZERO) <= 0) return;
 
-                        // Allocate refund proportionally per partner's subtotal
-                        // For multi-partner orders, each PartnerOrder gets its share
-                        BigDecimal partnerRefundAmount = refund.getAmount().negate();
+        BigDecimal refundAbs = refund.getAmount().abs();
+        BigDecimal remaining = refundAbs;
 
-                        if ("SETTLED".equals(settlementStatus) && settlementState != null
-                                && ("APPROVED".equals(settlementState) || "PAID".equals(settlementState))) {
-                            jdbc.update(carryForwardSql,
-                                    partnerId, partnerOrderId, refund.getId(), refund.getOrderId(),
-                                    partnerRefundAmount, refund.getCurrency(), idempotencyKey);
-                        } else if ("SETTLED".equals(settlementStatus) && settlementState != null
-                                && ("CALCULATED".equals(settlementState) || "OPEN".equals(settlementState)
-                                    || "UNDER_REVIEW".equals(settlementState))) {
-                            Long settlementId = poRs.getLong("settlement_id");
-                            jdbc.update(refundLineSql,
-                                    settlementId, partnerId, refund.getOrderId(), partnerOrderId, refund.getId(),
-                                    partnerRefundAmount, refund.getCurrency(), idempotencyKey);
-                            jdbc.update(updateSettlementSql,
-                                    partnerRefundAmount.abs(), partnerRefundAmount.abs(), settlementId);
-                        }
-                    }
-                    return null;
-                }, refund.getOrderId());
+        for (int i = 0; i < partnerOrders.size(); i++) {
+            PartnerOrderRefundRow po = partnerOrders.get(i);
+            BigDecimal allocation;
+            if (i == partnerOrders.size() - 1) {
+                allocation = remaining; // last gets remainder for rounding
+            } else {
+                allocation = refundAbs.multiply(po.partnerPayableAmount())
+                        .divide(totalPayable, 2, java.math.RoundingMode.HALF_UP);
+            }
+            remaining = remaining.subtract(allocation);
+            BigDecimal partnerRefundAmount = allocation.negate();
+
+            String idempotencyKey = "REFUND:" + refund.getId() + ":" + po.id();
+
+            if ("SETTLED".equals(po.settlementStatus()) && po.settlementState() != null
+                    && ("APPROVED".equals(po.settlementState()) || "PAID".equals(po.settlementState()))) {
+                String ck = "REFUND_CF:" + refund.getId() + ":" + po.id();
+                jdbc.update("INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,idempotency_key) " +
+                            "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id",
+                        po.partnerId(), po.id(), refund.getId(), refund.getOrderId(),
+                        partnerRefundAmount, refund.getCurrency(), ck);
+            } else if ("SETTLED".equals(po.settlementStatus()) && po.settlementState() != null
+                    && ("CALCULATED".equals(po.settlementState()) || "OPEN".equals(po.settlementState())
+                        || "UNDER_REVIEW".equals(po.settlementState()))) {
+                Long settlementId = po.settlementId();
+                // Only update settlement totals when the line is actually inserted (not duplicate)
+                String lineKey = "REFUND_LINE:" + refund.getId() + ":" + po.id();
+                int inserted = jdbc.update(
+                        "INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
+                        "VALUES (?,?,'REFUND',?,?,?,?,?,'Refund reversal',?) ON DUPLICATE KEY UPDATE id=id",
+                        settlementId, po.partnerId(), refund.getOrderId(), po.id(), refund.getId(),
+                        partnerRefundAmount, refund.getCurrency(), lineKey);
+                // inserted is 1 for new row, 0 for duplicate (ON DUPLICATE KEY UPDATE changes affected-rows semantics)
+                // We need to check if it was really a new insert vs duplicate
+                if (inserted == 1) {
+                    int updated = jdbc.update(
+                            "UPDATE settlements SET refund_amount=refund_amount+?,payable_amount=payable_amount-?,version=version+1 WHERE id=?",
+                            allocation, allocation, settlementId);
+                    if (updated != 1) throw new ConflictException("settlement_refund_header_conflict");
+                }
+            }
+        }
+
+        // Loyalty reversal (once per refund)
         Long accountId = jdbc.query("SELECT id FROM loyalty_accounts WHERE user_id=? FOR UPDATE", rs -> rs.next()?rs.getLong(1):null, userId);
         if (accountId == null) return;
+        String loyaltyBaseKey = "loyalty:refund:" + refund.getId();
         jdbc.query("SELECT id,original_points,remaining_points FROM point_lots WHERE account_id=? AND source_order_id=? AND lot_type='EARNED' FOR UPDATE", rs -> {
             if (!rs.next()) return null;
-            long lotId=rs.getLong(1); int original=rs.getInt(2), remaining=rs.getInt(3), debt=original-remaining;
+            long lotId=rs.getLong(1); int original=rs.getInt(2); int remainingPts=rs.getInt(3); int debt=original-remainingPts;
             jdbc.update("UPDATE point_lots SET remaining_points=0,version=version+1 WHERE id=?",lotId);
-            jdbc.update("UPDATE loyalty_accounts SET available_points=available_points-?,lifetime_points=GREATEST(0,lifetime_points-?),loyalty_debt=loyalty_debt+?,version=version+1 WHERE id=? AND available_points>=?",remaining,original,debt,accountId,remaining);
+            jdbc.update("UPDATE loyalty_accounts SET available_points=available_points-?,lifetime_points=GREATEST(0,lifetime_points-?),loyalty_debt=loyalty_debt+?,version=version+1 WHERE id=? AND available_points>=?",remainingPts,original,debt,accountId,remainingPts);
             jdbc.update("INSERT INTO loyalty_transactions(account_id,order_id,point_lot_id,transaction_type,points,value,currency,balance_after,idempotency_key) SELECT ?,?,?,'EARNED_REVERSED',?,0,?,available_points,? FROM loyalty_accounts WHERE id=?",
-                    accountId,refund.getOrderId(),lotId,-original,refund.getCurrency(),"loyalty:earned-reversed:"+lotId+":"+refund.getId(),accountId);
+                    accountId,refund.getOrderId(),lotId,-original,refund.getCurrency(),loyaltyBaseKey + ":earned:" + refund.getId(),accountId);
             return null;
         }, accountId, refund.getOrderId());
         jdbc.query("SELECT id,total_points,currency FROM point_reservations WHERE order_id=? AND status='CONSUMED' FOR UPDATE",rs->{
@@ -157,8 +189,13 @@ public class RefundResultV2Consumer {
             jdbc.update("UPDATE point_lots l JOIN point_reservation_allocations a ON a.point_lot_id=l.id SET l.remaining_points=l.remaining_points+a.reserved_points,l.version=l.version+1 WHERE a.reservation_id=? AND l.expires_at>CURRENT_TIMESTAMP(6)",reservationId);
             jdbc.update("UPDATE loyalty_accounts SET available_points=available_points+?,version=version+1 WHERE id=?",returned,accountId);
             jdbc.update("INSERT INTO loyalty_transactions(account_id,order_id,reservation_id,transaction_type,points,value,currency,balance_after,idempotency_key) SELECT ?,?,?,'REDEEMED_REFUNDED',?,0,?,available_points,? FROM loyalty_accounts WHERE id=?",
-                    accountId,refund.getOrderId(),reservationId,returned,currency,"loyalty:redeemed-refunded:"+reservationId+":"+refund.getId(),accountId);
+                    accountId,refund.getOrderId(),reservationId,returned,currency,loyaltyBaseKey + ":redeemed:" + refund.getId(),accountId);
             return null;
         },refund.getOrderId());
     }
+
+    private record PartnerOrderRefundRow(
+            Long id, Long partnerId,
+            BigDecimal subtotal, BigDecimal commissionAmount, BigDecimal partnerPayableAmount,
+            Long settlementId, String settlementStatus, String settlementState) {}
 }

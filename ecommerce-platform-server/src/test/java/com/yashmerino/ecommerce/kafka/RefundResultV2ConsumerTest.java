@@ -1,6 +1,7 @@
 package com.yashmerino.ecommerce.kafka;
 
 import com.yashmerino.ecommerce.kafka.events.RefundResultEventV2;
+import com.yashmerino.ecommerce.model.Order;
 import com.yashmerino.ecommerce.model.Payment;
 import com.yashmerino.ecommerce.model.domain.Refund;
 import com.yashmerino.ecommerce.repositories.OrderRepository;
@@ -73,6 +74,8 @@ class RefundResultV2ConsumerTest {
         when(inboxService.isAlreadyProcessed("main-server", "evt-1")).thenReturn(false);
         when(refundRepository.findById(1L)).thenReturn(Optional.of(refund));
         when(paymentRepository.findById(10L)).thenReturn(Optional.of(payment));
+        Order order = new Order(); order.setId(1L); order.setVersion(1L);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
         when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, 1L)).thenReturn(1);
         when(paymentRepository.updateStatusAndVersion(10L, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, 1L)).thenReturn(1);
 
@@ -99,6 +102,8 @@ class RefundResultV2ConsumerTest {
         when(inboxService.isAlreadyProcessed("main-server", "evt-1")).thenReturn(false);
         when(refundRepository.findById(1L)).thenReturn(Optional.of(refund));
         when(paymentRepository.findById(10L)).thenReturn(Optional.of(payment));
+        Order order = new Order(); order.setId(1L); order.setVersion(1L);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
         when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUND_FAILED, 1L)).thenReturn(1);
         when(paymentRepository.updateStatusAndVersion(10L, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUND_FAILED, 1L)).thenReturn(1);
 
@@ -147,6 +152,8 @@ class RefundResultV2ConsumerTest {
         when(inboxService.isAlreadyProcessed("main-server", "evt-1")).thenReturn(false);
         when(refundRepository.findById(1L)).thenReturn(Optional.of(refund));
         when(paymentRepository.findById(10L)).thenReturn(Optional.of(payment));
+        Order order = new Order(); order.setId(1L); order.setVersion(1L);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
         when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, 1L)).thenReturn(0);
 
         assertThrows(OptimisticLockException.class, () -> consumer.onRefundResult(event));
@@ -166,6 +173,8 @@ class RefundResultV2ConsumerTest {
         when(inboxService.isAlreadyProcessed("main-server", "evt-1")).thenReturn(false);
         when(refundRepository.findById(1L)).thenReturn(Optional.of(refund));
         when(paymentRepository.findById(10L)).thenReturn(Optional.of(payment));
+        Order order = new Order(); order.setId(1L); order.setVersion(1L);
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
         when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUND_FAILED, 1L)).thenReturn(0);
 
         assertThrows(OptimisticLockException.class, () -> consumer.onRefundResult(event));

@@ -10,21 +10,21 @@ public interface PartnerOrderService {
 
     PartnerOrderResponse getPartnerOrder(Long partnerId, Long partnerOrderId);
 
-    PartnerOrderResponse acceptOrder(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse acceptOrder(Long partnerId, Long partnerOrderId, String idempotencyKey);
 
-    PartnerOrderResponse rejectOrder(Long partnerId, Long partnerOrderId, String reason);
+    PartnerOrderResponse rejectOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey);
 
-    PartnerOrderResponse markPacking(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse markPacking(Long partnerId, Long partnerOrderId, String idempotencyKey);
 
-    PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId, String idempotencyKey);
 
-    PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId, String idempotencyKey);
 
-    PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId, String idempotencyKey);
 
-    PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason);
+    PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey);
 
-    PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason);
+    PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey);
 
-    PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId);
+    PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId, String idempotencyKey);
 }

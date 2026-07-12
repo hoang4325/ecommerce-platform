@@ -41,6 +41,7 @@ import org.springframework.test.web.servlet.MvcResult;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -82,7 +83,7 @@ class ProductControllerTest {
     @BeforeEach
     void setup() {
         productDTO.setName("Product");
-        productDTO.setPrice(2.50);
+        productDTO.setPrice(BigDecimal.valueOf(2.50));
         productDTO.setCategories(new HashSet<>());
     }
 
@@ -154,7 +155,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(3));
 
         productDTO.setName("Banana");
-        productDTO.setPrice(1.25);
+        productDTO.setPrice(BigDecimal.valueOf(1.25));
 
         mvc.perform(post("/api/product")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
@@ -256,7 +257,7 @@ class ProductControllerTest {
     @Test
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void addProductWithZeroPriceTest() throws Exception {
-        productDTO.setPrice(0.0);
+        productDTO.setPrice(BigDecimal.valueOf(0.0));
 
         mvc.perform(post("/api/product")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
@@ -273,7 +274,7 @@ class ProductControllerTest {
     @Test
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void addProductWithoutNameAndWithZeroPriceTest() throws Exception {
-        productDTO.setPrice(0.0);
+        productDTO.setPrice(BigDecimal.valueOf(0.0));
         productDTO.setName("");
 
         mvc.perform(post("/api/product")
@@ -350,7 +351,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(3));
 
         productDTO.setName("Banana");
-        productDTO.setPrice(1.25);
+        productDTO.setPrice(BigDecimal.valueOf(1.25));
 
         mvc.perform(post("/api/product")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
@@ -511,7 +512,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.price").value(5.0));
 
         productDTO.setName("Android");
-        productDTO.setPrice(2.5);
+        productDTO.setPrice(BigDecimal.valueOf(2.5));
 
         Category digitalServicesCategory = new Category();
         digitalServicesCategory.setId(1L);
@@ -541,7 +542,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void updateProductInvalidDTOTest() throws Exception {
         productDTO.setName("");
-        productDTO.setPrice(-5.2);
+        productDTO.setPrice(BigDecimal.valueOf(-5.2));
 
         mvc.perform(put("/api/product/1")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
@@ -566,7 +567,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"USER"})
     void updateProductWithUserRoleTest() throws Exception {
         productDTO.setName("Android");
-        productDTO.setPrice(2.5);
+        productDTO.setPrice(BigDecimal.valueOf(2.5));
 
         mvc.perform(put("/api/product/1")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))).andExpect(status().isForbidden()).andReturn();
@@ -581,7 +582,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"ERROR"})
     void updateProductWithWrongRoleTest() throws Exception {
         productDTO.setName("Android");
-        productDTO.setPrice(2.5);
+        productDTO.setPrice(BigDecimal.valueOf(2.5));
 
         mvc.perform(put("/api/product/1")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))).andExpect(status().isForbidden()).andReturn();
@@ -596,7 +597,7 @@ class ProductControllerTest {
     @WithMockUser(username = "anotherSeller", authorities = {"SELLER"})
     void updateProductWithWrongSellerTest() throws Exception {
         productDTO.setName("Android");
-        productDTO.setPrice(2.5);
+        productDTO.setPrice(BigDecimal.valueOf(2.5));
 
         MvcResult result = mvc.perform(put("/api/product/1")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))).andExpect(status().isForbidden()).andReturn();
@@ -673,7 +674,7 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.id").value(3));
 
         productDTO.setName("Banana");
-        productDTO.setPrice(1.25);
+        productDTO.setPrice(BigDecimal.valueOf(1.25));
 
         mvc.perform(post("/api/product")
                 .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))

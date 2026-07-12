@@ -49,7 +49,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.validation.annotation.Validated;
+import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -64,7 +64,6 @@ import static com.yashmerino.ecommerce.utils.RequestBodyToEntityConverter.conver
 @SecurityRequirement(name = SwaggerConfig.SECURITY_SCHEME_NAME)
 @RestController
 @RequestMapping("/api/product")
-@Validated
 public class ProductController {
 
     /**
@@ -101,7 +100,7 @@ public class ProductController {
             @ApiResponse(responseCode = SwaggerHttpStatus.INTERNAL_SERVER_ERROR, description = SwaggerMessages.INTERNAL_SERVER_ERROR,
                     content = @Content)})
     @PostMapping
-    public ResponseEntity<SuccessWithIdDTO> addProduct(@Validated @RequestBody ProductDTO productDTO) {
+    public ResponseEntity<SuccessWithIdDTO> addProduct(@Valid @RequestBody ProductDTO productDTO) {
         Long productId = productService.addProduct(productDTO);
 
         SuccessWithIdDTO successDTO = new SuccessWithIdDTO();
@@ -389,7 +388,7 @@ public class ProductController {
             @ApiResponse(responseCode = SwaggerHttpStatus.INTERNAL_SERVER_ERROR, description = SwaggerMessages.INTERNAL_SERVER_ERROR,
                     content = @Content)})
     @PutMapping("/{id}")
-    public ResponseEntity<SuccessDTO> updateProduct(@PathVariable Long id, @Validated @RequestBody ProductDTO productDTO) {
+    public ResponseEntity<SuccessDTO> updateProduct(@PathVariable Long id, @Valid @RequestBody ProductDTO productDTO) {
         productService.updateProduct(id, productDTO);
 
         SuccessDTO successDTO = new SuccessDTO();

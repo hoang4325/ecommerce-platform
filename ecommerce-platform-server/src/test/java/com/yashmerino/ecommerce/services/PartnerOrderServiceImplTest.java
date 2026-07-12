@@ -92,12 +92,13 @@ class PartnerOrderServiceImplTest {
     @Test
     void acceptOrder_Success() {
         stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.ACCEPTED, response.status());
     }
@@ -106,7 +107,7 @@ class PartnerOrderServiceImplTest {
     void acceptOrder_WrongStatus_ThrowsInvalidInput() {
         stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
-        assertThrows(InvalidInputException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
+        assertThrows(InvalidInputException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
@@ -114,18 +115,19 @@ class PartnerOrderServiceImplTest {
         when(jdbc.query(anyString(), any(RowMapper.class), eq(ORDER_ID), eq(PARTNER_ID)))
                 .thenReturn(List.of());
 
-        assertThrows(EntityNotFoundException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
+        assertThrows(EntityNotFoundException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void rejectOrder_Success() {
         stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.REJECTED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "Out of stock");
+        var response = partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "Out of stock", null);
 
         assertEquals(PartnerOrderStatus.REJECTED, response.status());
     }
@@ -135,18 +137,19 @@ class PartnerOrderServiceImplTest {
         stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
 
         assertThrows(InvalidInputException.class,
-                () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "reason"));
+                () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "reason", null));
     }
 
     @Test
     void markPacking_Success() {
         stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.PACKING);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.markPacking(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.markPacking(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.PACKING, response.status());
     }
@@ -155,18 +158,19 @@ class PartnerOrderServiceImplTest {
     void markPacking_WrongStatus_ThrowsInvalidInput() {
         stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
 
-        assertThrows(InvalidInputException.class, () -> partnerOrderService.markPacking(PARTNER_ID, ORDER_ID));
+        assertThrows(InvalidInputException.class, () -> partnerOrderService.markPacking(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void markReadyToShip_Success() {
         stubSelectForUpdate(PartnerOrderStatus.PACKING, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.READY_TO_SHIP);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.READY_TO_SHIP, response.status());
     }
@@ -176,18 +180,19 @@ class PartnerOrderServiceImplTest {
         stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
 
         assertThrows(InvalidInputException.class,
-                () -> partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID));
+                () -> partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void shipOrder_Success() {
         stubSelectForUpdate(PartnerOrderStatus.READY_TO_SHIP, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.SHIPPED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.SHIPPED, response.status());
     }
@@ -196,18 +201,19 @@ class PartnerOrderServiceImplTest {
     void shipOrder_WrongStatus_ThrowsInvalidInput() {
         stubSelectForUpdate(PartnerOrderStatus.PACKING, 0L);
 
-        assertThrows(InvalidInputException.class, () -> partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID));
+        assertThrows(InvalidInputException.class, () -> partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void deliverOrder_Success() {
         stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.DELIVERED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.DELIVERED, response.status());
     }
@@ -216,18 +222,19 @@ class PartnerOrderServiceImplTest {
     void deliverOrder_WrongStatus_ThrowsInvalidInput() {
         stubSelectForUpdate(PartnerOrderStatus.READY_TO_SHIP, 0L);
 
-        assertThrows(InvalidInputException.class, () -> partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID));
+        assertThrows(InvalidInputException.class, () -> partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void cancelOrder_FromNew_Success() {
         stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.CANCELLED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Customer request");
+        var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Customer request", null);
 
         assertEquals(PartnerOrderStatus.CANCELLED, response.status());
     }
@@ -235,12 +242,13 @@ class PartnerOrderServiceImplTest {
     @Test
     void cancelOrder_FromAccepted_Success() {
         stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.CANCELLED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Supplier issue");
+        var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Supplier issue", null);
 
         assertEquals(PartnerOrderStatus.CANCELLED, response.status());
     }
@@ -250,18 +258,19 @@ class PartnerOrderServiceImplTest {
         stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
         assertThrows(InvalidInputException.class,
-                () -> partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "reason"));
+                () -> partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "reason", null));
     }
 
     @Test
     void requestReturn_Success() {
         stubSelectForUpdate(PartnerOrderStatus.DELIVERED, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.RETURN_REQUESTED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "Defective item");
+        var response = partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "Defective item", null);
 
         assertEquals(PartnerOrderStatus.RETURN_REQUESTED, response.status());
     }
@@ -271,18 +280,19 @@ class PartnerOrderServiceImplTest {
         stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
         assertThrows(InvalidInputException.class,
-                () -> partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "reason"));
+                () -> partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "reason", null));
     }
 
     @Test
     void approveReturn_Success() {
         stubSelectForUpdate(PartnerOrderStatus.RETURN_REQUESTED, 0L);
+        partnerOrder.setStatus(PartnerOrderStatus.RETURNED);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
         doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
-        var response = partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.RETURNED, response.status());
     }
@@ -291,7 +301,7 @@ class PartnerOrderServiceImplTest {
     void approveReturn_WrongStatus_ThrowsInvalidInput() {
         stubSelectForUpdate(PartnerOrderStatus.DELIVERED, 0L);
 
-        assertThrows(InvalidInputException.class, () -> partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID));
+        assertThrows(InvalidInputException.class, () -> partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
@@ -335,16 +345,17 @@ class PartnerOrderServiceImplTest {
         stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
         when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(0);
 
-        assertThrows(ConflictException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
+        assertThrows(ConflictException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, null));
     }
 
     @Test
     void acceptOrder_Idempotent_WhenAlreadyAccepted() {
+        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
         stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
 
-        var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID);
+        var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, null);
 
         assertEquals(PartnerOrderStatus.ACCEPTED, response.status());
     }

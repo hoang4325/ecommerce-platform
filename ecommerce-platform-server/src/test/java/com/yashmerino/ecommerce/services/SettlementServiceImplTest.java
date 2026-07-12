@@ -26,6 +26,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -50,6 +52,9 @@ class SettlementServiceImplTest {
 
     @Mock
     private PartnerAuthorizationService authz;
+
+    @Mock
+    private JdbcTemplate jdbc;
 
     @InjectMocks
     private SettlementServiceImpl settlementService;
@@ -120,9 +125,13 @@ class SettlementServiceImplTest {
             return saved;
         });
 
-        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtBetween(
-                PARTNER_ID, PartnerOrderStatus.DELIVERED, periodStart, periodEnd))
-                .thenReturn(List.of(po1, po2));
+        lenient().when(settlementRepository.findByPartnerId(eq(PARTNER_ID), any(Pageable.class))).thenReturn(Page.empty());
+        lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
+                eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of(po1, po2));
+        lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
+        lenient().when(partnerOrderRepository.markAsSettled(anyLong(), anyList())).thenReturn(2);
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
@@ -144,9 +153,12 @@ class SettlementServiceImplTest {
             return saved;
         });
 
-        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtBetween(
-                PARTNER_ID, PartnerOrderStatus.DELIVERED, periodStart, periodEnd))
-                .thenReturn(List.of());
+        lenient().when(settlementRepository.findByPartnerId(eq(PARTNER_ID), any(Pageable.class))).thenReturn(Page.empty());
+        lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
+                eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of());
+        lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 

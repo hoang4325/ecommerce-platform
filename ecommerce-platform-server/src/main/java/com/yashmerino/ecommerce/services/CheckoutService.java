@@ -50,6 +50,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -85,19 +86,21 @@ public class CheckoutService {
         if ("COMPLETED".equals(stored.status())) return read(stored.response(), CheckoutResponseDTO.class);
 
         List<CartLine> lines = jdbc.query(
-                "SELECT ci.product_id,COALESCE(p.name,'') AS name," +
+                "SELECT ci.product_id," +
+                "       COALESCE(p.name,'') AS name," +
                 "       COALESCE(po.price,p.price) AS price," +
                 "       ci.quantity," +
                 "       CASE WHEN ci.offer_id IS NOT NULL THEN po.on_hand_quantity ELSE p.on_hand_quantity END AS on_hand," +
                 "       CASE WHEN ci.offer_id IS NOT NULL THEN po.reserved_quantity ELSE p.reserved_quantity END AS reserved," +
                 "       CASE WHEN ci.offer_id IS NOT NULL THEN (po.status='APPROVED' AND p.active AND pr.status='APPROVED') ELSE p.active END AS active," +
-                "       ci.offer_id,ci.partner_id," +
-                "       COALESCE(po.partner_sku,p.sku) AS partner_sku," +
-                "       COALESCE(pr.name,'') AS partner_name " +
+                "       ci.offer_id," +
+                "       po.partner_id AS partner_id," +
+                "       po.partner_sku AS partner_sku," +
+                "       COALESCE(pr.business_name, pr.name) AS partner_name " +
                 "FROM cart_items ci " +
                 "JOIN products p ON p.id=ci.product_id " +
                 "LEFT JOIN partner_offers po ON po.id=ci.offer_id " +
-                "LEFT JOIN partners pr ON pr.id=ci.partner_id " +
+                "LEFT JOIN partners pr ON pr.id=po.partner_id " +
                 "WHERE ci.cart_id=? ORDER BY ci.id FOR UPDATE",
                 (rs, n) -> new CartLine(
                         rs.getLong(1), rs.getString(2), rs.getBigDecimal(3), rs.getInt(4),
@@ -105,6 +108,13 @@ public class CheckoutService {
                         rs.getObject(8, Long.class), rs.getObject(9, Long.class),
                         rs.getString(10), rs.getString(11)),
                 user.getCart().getId());
+        // Validate: for offer items, ci.product_id must equal po.product_id
+        // and partner must be resolveable
+        for (CartLine line : lines) {
+            if (line.offerId() != null && line.partnerId() == null) {
+                throw new ConflictException("offer_partner_not_found");
+            }
+        }
         if (lines.isEmpty()) throw new ConflictException("cart_is_empty");
         lines.sort((a, b) -> {
             Long ao = a.offerId(), bo = b.offerId();
@@ -439,16 +449,22 @@ public class CheckoutService {
     private void createPartnerOrdersAtCheckout(Long orderId) {
         List<CommissionService.CommissionRequest> requests = jdbc.query(
                 "SELECT oi.product_id,oi.offer_id,oi.partner_id,oi.line_total,o.currency," +
-                "       (SELECT GROUP_CONCAT(pc.categories_id) FROM products_categories pc WHERE pc.product_id=oi.product_id) AS category_ids " +
+                "       (SELECT GROUP_CONCAT(DISTINCT pc.categories_id ORDER BY pc.categories_id) FROM products_categories pc WHERE pc.product_id=oi.product_id) AS category_ids " +
                 "FROM order_items oi " +
                 "JOIN orders o ON o.id=oi.order_id " +
                 "WHERE oi.order_id=? AND oi.partner_id IS NOT NULL FOR UPDATE",
                 (rs, n) -> {
                     String catIds = rs.getString("category_ids");
+                    Set<Long> categories = new java.util.HashSet<>();
+                    if (catIds != null && !catIds.isEmpty()) {
+                        for (String c : catIds.split(",")) {
+                            categories.add(Long.valueOf(c.trim()));
+                        }
+                    }
                     return new CommissionService.CommissionRequest(
                             rs.getLong("product_id"),
                             rs.getObject("offer_id", Long.class),
-                            catIds != null ? Long.valueOf(catIds.split(",")[0]) : null,
+                            categories,
                             rs.getLong("partner_id"),
                             rs.getBigDecimal("line_total"),
                             rs.getString("currency"));

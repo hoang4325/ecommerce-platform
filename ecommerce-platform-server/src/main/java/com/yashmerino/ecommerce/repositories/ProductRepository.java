@@ -44,11 +44,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
      *
      * @return List of Products.
      */
-    @Query(
-            value = "SELECT * FROM products p WHERE p.user_id = ?1",
-            countQuery = "SELECT count(*) FROM products p WHERE p.user_id = ?1",
-            nativeQuery = true
-    )
+    @Query("SELECT p FROM products p WHERE p.user.id = ?1")
     Page<Product> getProductsBySellerId(Long userId, Pageable pageable);
 
     /**

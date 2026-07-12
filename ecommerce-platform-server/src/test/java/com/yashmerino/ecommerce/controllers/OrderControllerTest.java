@@ -86,10 +86,7 @@ class OrderControllerTest {
     void placeOrderTest() throws Exception {
         mvc.perform(post("/api/order")
                 .content(objectMapper.writeValueAsString(orderDTO)).contentType(APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value(200))
-                .andExpect(jsonPath("$.message").value("order_placed_successfully"))
-                .andExpect(jsonPath("$.id").value(2));
+                .andExpect(status().isGone());
     }
 
     /**

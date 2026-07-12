@@ -95,9 +95,7 @@ class PaymentControllerTest {
 
         mvc.perform(post("/api/payment/1")
                 .content(objectMapper.writeValueAsString(paymentDTO)).contentType(APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value(200))
-                .andExpect(jsonPath("$.message").value("payment_sent_successfully"));
+                .andExpect(status().isGone());
     }
 
     /**

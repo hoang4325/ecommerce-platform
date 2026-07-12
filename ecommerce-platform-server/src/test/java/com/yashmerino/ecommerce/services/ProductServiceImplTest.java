@@ -88,6 +88,10 @@ class ProductServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        SecurityContextHolder.setContext(securityContext);
+        lenient().when(securityContext.getAuthentication()).thenReturn(authentication);
+        lenient().when(authentication.getName()).thenReturn("seller");
+
         testUser = new User();
         testUser.setId(1L);
         testUser.setUsername("seller");
@@ -233,7 +237,7 @@ class ProductServiceImplTest {
     void testAddProductCreatesNewProduct() {
         ProductDTO productDTO = new ProductDTO();
         productDTO.setName("New Product");
-        productDTO.setPrice(49.99);
+        productDTO.setPrice(BigDecimal.valueOf(49.99));
         
         when(userDetails.getUsername()).thenReturn("seller");
         when(authentication.getPrincipal()).thenReturn(userDetails);

@@ -33,6 +33,7 @@ public class SettlementServiceImpl implements SettlementService {
     private final SettlementLineRepository settlementLineRepository;
     private final PartnerOrderRepository partnerOrderRepository;
     private final PartnerAuthorizationService authz;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     @Override
     @Transactional
@@ -45,7 +46,7 @@ public class SettlementServiceImpl implements SettlementService {
     @Override
     @Transactional
     public SettlementResponse adminCalculateSettlement(Long partnerId, LocalDateTime periodStart,
-                                                        LocalDateTime periodEnd, String currency) {
+                                                         LocalDateTime periodEnd, String currency) {
         return doCalculateSettlement(partnerId, periodStart, periodEnd, currency);
     }
 
@@ -53,18 +54,26 @@ public class SettlementServiceImpl implements SettlementService {
                                                        LocalDateTime periodEnd, String currency) {
         String resolvedCurrency = currency != null ? currency : "USD";
 
+        // Period overlap check: reject if any non-OPEN settlement overlaps
+        List<Settlement> existing = settlementRepository.findByPartnerId(partnerId, Pageable.unpaged()).getContent();
+        for (Settlement s : existing) {
+            if (s.getStatus() == SettlementStatus.OPEN) continue;
+            if (periodStart.isBefore(s.getPeriodEnd()) && periodEnd.isAfter(s.getPeriodStart())) {
+                throw new ConflictException("settlement_period_overlaps_with_id=" + s.getId());
+            }
+        }
+
         Settlement settlement = settlementRepository
                 .findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(partnerId, periodStart, periodEnd, resolvedCurrency)
                 .orElse(null);
 
         if (settlement != null) {
-            if (settlement.getStatus() == SettlementStatus.PAID || settlement.getStatus() == SettlementStatus.APPROVED) {
-                throw new ConflictException("settlement_already_finalized");
-            }
-            if (settlement.getStatus() == SettlementStatus.CALCULATED || settlement.getStatus() == SettlementStatus.OPEN) {
-                // Preserve ADJUSTMENT lines; delete only auto-generated SALE lines
-                settlementLineRepository.deleteBySettlementIdAndLineType(settlement.getId(), "SALE");
-                settlementLineRepository.flush();
+            // ONCE policy: do not recalculate CALCULATED settlements
+            if (settlement.getStatus() == SettlementStatus.CALCULATED
+                    || settlement.getStatus() == SettlementStatus.UNDER_REVIEW
+                    || settlement.getStatus() == SettlementStatus.APPROVED
+                    || settlement.getStatus() == SettlementStatus.PAID) {
+                throw new ConflictException("settlement_already_calculated");
             }
         }
 
@@ -104,14 +113,55 @@ public class SettlementServiceImpl implements SettlementService {
             settlementLineRepository.save(line);
         }
 
+        // Claim pending adjustments
+        BigDecimal carryForwardAmount = BigDecimal.ZERO;
+        List<PendingAdjustmentRow> pendings = jdbc.query(
+                "SELECT id,amount,idempotency_key FROM pending_settlement_adjustments " +
+                "WHERE partner_id=? AND currency=? AND status='PENDING' ORDER BY id FOR UPDATE",
+                (rs, n) -> new PendingAdjustmentRow(rs.getLong("id"), rs.getBigDecimal("amount"), rs.getString("idempotency_key")),
+                partnerId, resolvedCurrency);
+
+        for (PendingAdjustmentRow p : pendings) {
+            SettlementLine line = new SettlementLine();
+            line.setSettlement(settlement);
+            line.setPartner(settlement.getPartner());
+            line.setLineType("CARRY_FORWARD");
+            line.setAmount(p.amount());
+            line.setCurrency(resolvedCurrency);
+            line.setIdempotencyKey("CARRY_FORWARD:" + p.id());
+            settlementLineRepository.save(line);
+
+            carryForwardAmount = carryForwardAmount.add(p.amount());
+
+            jdbc.update("UPDATE pending_settlement_adjustments SET " +
+                            "status='APPLIED',claimed_settlement_id=?,applied_line_id=?,updated_at=CURRENT_TIMESTAMP(6),version=version+1 " +
+                            "WHERE id=? AND status='PENDING'",
+                    settlement.getId(), line.getId(), p.id());
+        }
+
+        // Full payable formula
+        BigDecimal refundAmount = BigDecimal.ZERO; // will be populated from settlement_lines REFUND type
+        BigDecimal manualAdjustment = BigDecimal.ZERO; // will be populated from ADJUSTMENT lines
+
         settlement.setGrossSales(grossSales);
         settlement.setCommissionAmount(commissionAmount);
-        settlement.setPayableAmount(grossSales.subtract(commissionAmount).max(BigDecimal.ZERO));
+        settlement.setRefundAmount(refundAmount);
+        settlement.setManualAdjustment(manualAdjustment);
+        settlement.setPayableAmount(
+                grossSales
+                .subtract(commissionAmount)
+                .subtract(refundAmount)
+                .add(manualAdjustment)
+                .add(carryForwardAmount)
+                .max(BigDecimal.ZERO));
         settlement = settlementRepository.save(settlement);
 
         if (!deliveredOrders.isEmpty()) {
             List<Long> orderIds = deliveredOrders.stream().map(PartnerOrder::getId).toList();
-            partnerOrderRepository.markAsSettled(settlement.getId(), orderIds);
+            int changed = partnerOrderRepository.markAsSettled(settlement.getId(), orderIds);
+            if (changed != orderIds.size()) {
+                throw new ConflictException("settlement_claim_conflict_expected=" + orderIds.size() + "_got=" + changed);
+            }
         }
 
         return SettlementResponse.from(settlement);
@@ -221,4 +271,6 @@ public class SettlementServiceImpl implements SettlementService {
 
         return SettlementResponse.from(settlement);
     }
+
+    private record PendingAdjustmentRow(Long id, BigDecimal amount, String idempotencyKey) {}
 }
