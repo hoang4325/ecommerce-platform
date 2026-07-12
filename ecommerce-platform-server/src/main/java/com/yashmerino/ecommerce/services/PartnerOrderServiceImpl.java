@@ -95,7 +95,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse acceptOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "ACCEPT", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "ACCEPT", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.ACCEPTED) {
@@ -122,7 +122,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse rejectOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "REJECT", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "REJECT", canonicalReason(reason), idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.REJECTED) {
@@ -149,7 +149,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse markPacking(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "PACKING", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "PACKING", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.PACKING) {
@@ -176,7 +176,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "READY_TO_SHIP", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "READY_TO_SHIP", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.READY_TO_SHIP) {
@@ -203,7 +203,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "SHIP", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "SHIP", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.SHIPPED) {
@@ -230,7 +230,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "DELIVER", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "DELIVER", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.DELIVERED) {
@@ -257,7 +257,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "CANCEL", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "CANCEL", canonicalReason(reason), idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.CANCELLED) {
@@ -285,7 +285,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "RETURN_REQUEST", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "RETURN_REQUEST", canonicalReason(reason), idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.RETURN_REQUESTED) {
@@ -312,7 +312,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional
     public PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
-        return executeCommand(partnerId, partnerOrderId, "APPROVE_RETURN", idempotencyKey,
+        return executeCommand(partnerId, partnerOrderId, "APPROVE_RETURN", "", idempotencyKey,
                 () -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.RETURNED) {
@@ -336,13 +336,14 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     }
 
     private PartnerOrderResponse executeCommand(Long partnerId, Long partnerOrderId,
-                                                  String commandType, String idempotencyKey,
+                                                  String commandType, String canonicalPayload,
+                                                  String idempotencyKey,
                                                   CommandExecutor executor) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new InvalidInputException("idempotency_key_required");
         }
 
-        String requestHash = hash(partnerOrderId + "|" + commandType + "|" + idempotencyKey);
+        String requestHash = hash(partnerOrderId + "|" + commandType + "|" + canonicalPayload);
 
         try {
             jdbc.update(
@@ -428,6 +429,10 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
         } catch (java.security.NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256_unavailable", e);
         }
+    }
+
+    private String canonicalReason(String reason) {
+        return "reason=" + (reason == null ? "" : reason.trim());
     }
 
     private String write(Object value) {

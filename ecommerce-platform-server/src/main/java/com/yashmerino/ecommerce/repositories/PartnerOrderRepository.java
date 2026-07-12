@@ -34,12 +34,13 @@ public interface PartnerOrderRepository extends JpaRepository<PartnerOrder, Long
             @Param("periodEnd") LocalDateTime periodEnd);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT po FROM PartnerOrder po WHERE po.partner.id = :partnerId AND po.status = :status AND po.settlementStatus = 'UNSETTLED' AND po.deliveredAt >= :periodStart AND po.deliveredAt < :periodEnd")
-    List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
+    @Query("SELECT po FROM PartnerOrder po WHERE po.partner.id = :partnerId AND po.status = :status AND po.settlementStatus = 'UNSETTLED' AND po.deliveredAt >= :periodStart AND po.deliveredAt < :periodEnd AND po.currency = :currency")
+    List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
             @Param("partnerId") Long partnerId,
             @Param("status") PartnerOrderStatus status,
             @Param("periodStart") LocalDateTime periodStart,
-            @Param("periodEnd") LocalDateTime periodEnd);
+            @Param("periodEnd") LocalDateTime periodEnd,
+            @Param("currency") String currency);
 
     @Modifying
     @Query("UPDATE PartnerOrder po SET po.settlementStatus = 'SETTLED', po.settlementId = :settlementId WHERE po.id IN :orderIds AND po.settlementStatus = 'UNSETTLED'")

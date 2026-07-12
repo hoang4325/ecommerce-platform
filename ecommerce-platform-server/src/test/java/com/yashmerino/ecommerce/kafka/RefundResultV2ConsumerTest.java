@@ -22,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -113,6 +114,57 @@ class RefundResultV2ConsumerTest {
         verify(refundRepository).save(refund);
         verify(paymentRepository).findById(10L);
         verify(inboxService).markProcessed("main-server", "evt-1", "RefundResultEventV2", null, 1L);
+    }
+
+    @Test
+    void onRefundResult_Succeeded_ForApprovedSettlementCreatesCarryForwardWithoutMutatingSettlement() {
+        RefundResultEventV2 event = createEvent(1L, "SUCCEEDED");
+        Refund refund = new Refund();
+        refund.setId(1L);
+        refund.setOrderId(1L);
+        refund.setPaymentId(10L);
+        refund.setVersion(1L);
+        refund.setAmount(new java.math.BigDecimal("100.00"));
+        refund.setCurrency("EUR");
+
+        Payment payment = new Payment();
+        payment.setId(10L);
+        payment.setVersion(1L);
+        payment.setExternalPaymentId("pm_123");
+        Order order = new Order();
+        order.setId(1L);
+        order.setVersion(1L);
+
+        when(inboxService.isAlreadyProcessed("main-server", "evt-1")).thenReturn(false);
+        when(refundRepository.findById(1L)).thenReturn(Optional.of(refund));
+        when(paymentRepository.findById(10L)).thenReturn(Optional.of(payment));
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, 1L)).thenReturn(1);
+        when(paymentRepository.updateStatusAndVersion(10L, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, 1L)).thenReturn(1);
+        when(jdbc.queryForObject(startsWith("SELECT user_id FROM orders"), eq(Long.class), eq(1L))).thenReturn(99L);
+        when(jdbc.query(contains("FROM partner_orders po LEFT JOIN settlements"), any(org.springframework.jdbc.core.RowMapper.class), eq(1L)))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    org.springframework.jdbc.core.RowMapper<Object> mapper = invocation.getArgument(1);
+                    java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+                    when(rs.getLong("id")).thenReturn(300L);
+                    when(rs.getLong("partner_id")).thenReturn(40L);
+                    when(rs.getBigDecimal("subtotal")).thenReturn(new java.math.BigDecimal("100.00"));
+                    when(rs.getBigDecimal("commission_amount")).thenReturn(new java.math.BigDecimal("10.00"));
+                    when(rs.getBigDecimal("partner_payable_amount")).thenReturn(new java.math.BigDecimal("90.00"));
+                    when(rs.getObject("settlement_id", Long.class)).thenReturn(500L);
+                    when(rs.getString("settlement_status")).thenReturn("SETTLED");
+                    when(rs.getString("set_status")).thenReturn("APPROVED");
+                    return java.util.List.of(mapper.mapRow(rs, 0));
+                });
+        lenient().when(jdbc.update(startsWith("INSERT INTO settlement_lines"), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(1);
+
+        consumer.onRefundResult(event);
+
+        verify(jdbc, never()).update(startsWith("UPDATE settlements SET"), any(), any(), anyLong());
+        verify(jdbc).update(startsWith("INSERT INTO pending_settlement_adjustments"),
+                eq(40L), eq(300L), eq(1L), eq(1L), any(java.math.BigDecimal.class), eq("EUR"), eq("REFUND_CF:1:300"));
     }
 
     @Test

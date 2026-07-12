@@ -13,7 +13,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
 class Phase1MigrationMySqlTest {
     @Container
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0.39")

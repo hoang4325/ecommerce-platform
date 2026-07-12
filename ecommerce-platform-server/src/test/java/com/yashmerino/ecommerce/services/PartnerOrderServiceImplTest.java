@@ -18,6 +18,7 @@ import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -25,7 +26,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 
@@ -155,6 +159,28 @@ class PartnerOrderServiceImplTest {
 
         assertThrows(InvalidInputException.class,
                 () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "reason", IDEMPOTENCY_KEY));
+    }
+
+    @Test
+    void rejectOrder_DuplicateIdempotencyKeyWithDifferentReason_ThrowsConflict() throws Exception {
+        doThrow(new DuplicateKeyException("duplicate"))
+                .when(jdbc).update(startsWith("INSERT INTO partner_order_commands"),
+                        eq(ORDER_ID), eq(PARTNER_ID), eq("REJECT"), eq(IDEMPOTENCY_KEY), anyString());
+        when(jdbc.query(startsWith("SELECT request_hash"), any(RowMapper.class), eq(IDEMPOTENCY_KEY), eq(ORDER_ID)))
+                .thenAnswer(invocation -> {
+                    @SuppressWarnings("unchecked")
+                    RowMapper<Object> mapper = invocation.getArgument(1);
+                    java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
+                    when(rs.getString("request_hash")).thenReturn(hash(ORDER_ID + "|REJECT|" + IDEMPOTENCY_KEY));
+                    when(rs.getString("response_snapshot")).thenReturn(null);
+                    when(rs.getString("status")).thenReturn("PENDING");
+                    return List.of(mapper.mapRow(rs, 0));
+                });
+
+        assertThrows(ConflictException.class,
+                () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "Changed reason", IDEMPOTENCY_KEY));
+
+        verify(jdbc, never()).update(startsWith("UPDATE partner_orders SET status=?"), any(), any(), anyLong(), any(), anyLong());
     }
 
     @Test
@@ -375,5 +401,9 @@ class PartnerOrderServiceImplTest {
         var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID, IDEMPOTENCY_KEY);
 
         assertEquals(PartnerOrderStatus.ACCEPTED, response.status());
+    }
+
+    private static String hash(String value) throws Exception {
+        return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
     }
 }

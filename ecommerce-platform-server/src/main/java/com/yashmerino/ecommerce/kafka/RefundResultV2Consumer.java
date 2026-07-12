@@ -118,25 +118,9 @@ public class RefundResultV2Consumer {
 
         if (partnerOrders.isEmpty()) return;
 
-        // Calculate total partner payable for proportional allocation
-        BigDecimal totalPayable = partnerOrders.stream()
-                .map(PartnerOrderRefundRow::partnerPayableAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        if (totalPayable.compareTo(BigDecimal.ZERO) <= 0) return;
-
-        BigDecimal refundAbs = refund.getAmount().abs();
-        BigDecimal remaining = refundAbs;
-
-        for (int i = 0; i < partnerOrders.size(); i++) {
-            PartnerOrderRefundRow po = partnerOrders.get(i);
-            BigDecimal allocation;
-            if (i == partnerOrders.size() - 1) {
-                allocation = remaining;
-            } else {
-                allocation = refundAbs.multiply(po.partnerPayableAmount())
-                        .divide(totalPayable, 2, java.math.RoundingMode.HALF_UP);
-            }
-            remaining = remaining.subtract(allocation);
+        for (PartnerOrderRefundRow po : partnerOrders) {
+            BigDecimal allocation = po.partnerPayableAmount();
+            if (allocation == null || allocation.compareTo(BigDecimal.ZERO) <= 0) continue;
             BigDecimal partnerRefundAmount = allocation.negate();
 
             boolean settled = "SETTLED".equals(po.settlementStatus()) && po.settlementState() != null;
@@ -144,8 +128,8 @@ public class RefundResultV2Consumer {
             boolean openCalculated = settled && ("OPEN".equals(po.settlementState()) || "CALCULATED".equals(po.settlementState())
                     || "UNDER_REVIEW".equals(po.settlementState()));
 
-            if (approvedPaid || openCalculated) {
-                // Already settled — insert REFUND line into the current settlement
+            if (openCalculated) {
+                // Mutable settlement states can receive the refund line in-place.
                 Long settlementId = po.settlementId();
                 String lineKey = "REFUND_LINE:" + refund.getId() + ":" + po.id();
                 int inserted = jdbc.update(
@@ -159,14 +143,13 @@ public class RefundResultV2Consumer {
                             allocation, allocation, settlementId);
                     if (updated != 1) throw new ConflictException("settlement_refund_header_conflict");
                 }
-                if (approvedPaid) {
-                    // Settlement already APPROVED/PAID — carry-forward to next settlement
-                    String ck = "REFUND_CF:" + refund.getId() + ":" + po.id();
-                    jdbc.update("INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,idempotency_key) " +
-                                "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id",
-                            po.partnerId(), po.id(), refund.getId(), refund.getOrderId(),
-                            partnerRefundAmount, refund.getCurrency(), ck);
-                }
+            } else if (approvedPaid) {
+                // Approved/paid settlements are immutable; carry correction forward.
+                String ck = "REFUND_CF:" + refund.getId() + ":" + po.id();
+                jdbc.update("INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,idempotency_key) " +
+                            "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id",
+                        po.partnerId(), po.id(), refund.getId(), refund.getOrderId(),
+                        partnerRefundAmount, refund.getCurrency(), ck);
             } else {
                 // UNSETTLED — create pending adjustment for next settlement calculation
                 String ck = "REFUND_CF:" + refund.getId() + ":" + po.id();

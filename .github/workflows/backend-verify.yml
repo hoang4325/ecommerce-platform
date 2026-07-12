@@ -29,7 +29,14 @@ jobs:
         run: docker version
 
       - name: Run backend tests
-        run: mvn -B -pl ecommerce-platform-server -am test
+        run: mvn -B -pl ecommerce-platform-server -am clean verify
+
+      - name: Fail on skipped tests
+        if: always()
+        run: |
+          if grep -R "Skipped: [1-9]" ecommerce-platform-server/target/surefire-reports ecommerce-platform-server/target/failsafe-reports 2>/dev/null; then
+            exit 1
+          fi
 
       - name: Publish Surefire reports
         if: always()
@@ -37,4 +44,12 @@ jobs:
         with:
           name: backend-surefire-reports
           path: ecommerce-platform-server/target/surefire-reports/**
+          if-no-files-found: warn
+
+      - name: Publish Failsafe reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-failsafe-reports
+          path: ecommerce-platform-server/target/failsafe-reports/**
           if-no-files-found: warn

@@ -95,8 +95,11 @@ public class SettlementServiceImpl implements SettlementService {
 
         // Atomic claim: lock only UNSETTLED DELIVERED orders within the period
         List<PartnerOrder> deliveredOrders = partnerOrderRepository
-                .findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
-                        partnerId, PartnerOrderStatus.DELIVERED, periodStart, periodEnd);
+                .findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
+                        partnerId, PartnerOrderStatus.DELIVERED, periodStart, periodEnd, resolvedCurrency)
+                .stream()
+                .filter(po -> resolvedCurrency.equals(po.getCurrency()))
+                .toList();
 
         BigDecimal grossSales = BigDecimal.ZERO;
         BigDecimal commissionAmount = BigDecimal.ZERO;

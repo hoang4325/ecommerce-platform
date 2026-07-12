@@ -505,7 +505,7 @@ public class CheckoutService {
                         String currency = rs.getString("currency");
 
                         jdbc.update("INSERT INTO partner_orders(order_id,partner_id,status,subtotal,discount_allocation,shipping_allocation,commission_amount,partner_payable_amount,currency,settlement_status,version,created_at,updated_at) " +
-                                    "VALUES (?,?,'AWAITING_PAYMENT',?,?,0,?,?,?,?,'UNSETTLED',0,NOW(),NOW())",
+                                    "VALUES (?,?,'AWAITING_PAYMENT',?,?,0,?,?,?,'UNSETTLED',0,NOW(),NOW())",
                                 orderId, partnerId, subtotal, discountAllocation, commissionAmount, payable, currency);
                     }
                     return null;

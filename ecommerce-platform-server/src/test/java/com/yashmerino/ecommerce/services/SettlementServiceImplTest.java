@@ -129,8 +129,8 @@ class SettlementServiceImplTest {
         lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
         lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
-        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
-                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of(po1, po2));
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of(po1, po2));
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
         lenient().when(partnerOrderRepository.markAsSettled(anyLong(), anyList())).thenReturn(2);
 
@@ -158,8 +158,8 @@ class SettlementServiceImplTest {
         lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
         lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
-        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
-                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of());
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of());
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
@@ -169,6 +169,54 @@ class SettlementServiceImplTest {
         assertEquals(BigDecimal.ZERO, response.commissionAmount());
         assertEquals(BigDecimal.ZERO, response.payableAmount());
         verify(settlementLineRepository, never()).save(any(SettlementLine.class));
+    }
+
+    @Test
+    void calculateSettlement_ClaimsOnlyPartnerOrdersInRequestedCurrency() {
+        Order order = new Order();
+        order.setId(10L);
+
+        PartnerOrder usdOrder = new PartnerOrder();
+        usdOrder.setId(200L);
+        usdOrder.setPartner(partner);
+        usdOrder.setOrder(order);
+        usdOrder.setSubtotal(new BigDecimal("100.00"));
+        usdOrder.setCommissionAmount(new BigDecimal("10.00"));
+        usdOrder.setCurrency("USD");
+        usdOrder.setStatus(PartnerOrderStatus.DELIVERED);
+
+        PartnerOrder eurOrder = new PartnerOrder();
+        eurOrder.setId(201L);
+        eurOrder.setPartner(partner);
+        eurOrder.setOrder(order);
+        eurOrder.setSubtotal(new BigDecimal("200.00"));
+        eurOrder.setCommissionAmount(new BigDecimal("20.00"));
+        eurOrder.setCurrency("EUR");
+        eurOrder.setStatus(PartnerOrderStatus.DELIVERED);
+
+        lenient().doNothing().when(authz).requireSettlementRead(PARTNER_ID);
+        lenient().when(settlementRepository.save(any(Settlement.class))).thenAnswer(invocation -> {
+            Settlement saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(SETTLEMENT_ID);
+            }
+            return saved;
+        });
+        lenient().when(settlementRepository.findByPartnerIdAndCurrency(eq(PARTNER_ID), eq("USD"), any(Pageable.class)))
+                .thenReturn(Page.empty());
+        lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any()))
+                .thenReturn(null);
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
+                eq(PARTNER_ID), eq(PartnerOrderStatus.DELIVERED), eq(periodStart), eq(periodEnd), eq("USD")))
+                .thenReturn(List.of(usdOrder, eurOrder));
+        lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
+        lenient().when(partnerOrderRepository.markAsSettled(anyLong(), anyList())).thenReturn(1);
+
+        var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
+
+        assertEquals(new BigDecimal("100.00"), response.grossSales());
+        assertEquals(new BigDecimal("10.00"), response.commissionAmount());
+        verify(partnerOrderRepository).markAsSettled(SETTLEMENT_ID, List.of(200L));
     }
 
     @Test
@@ -185,8 +233,8 @@ class SettlementServiceImplTest {
 
         lenient().when(settlementRepository.findByPartnerIdAndCurrency(eq(PARTNER_ID), anyString(), any(Pageable.class))).thenReturn(Page.empty());
         lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
-        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
-                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of());
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of());
         lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(300L, new BigDecimal("-25.00"), "adj-300")))
                 .when(jdbc).query(contains("pending_settlement_adjustments"), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
 

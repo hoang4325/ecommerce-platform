@@ -13,7 +13,7 @@ import java.util.TreeSet;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@Testcontainers(disabledWithoutDocker = true)
+@Testcontainers
 class Phase2MigrationMySqlTest {
 
     static final String TEST_DB = "ecommerce_platform";
