@@ -6,6 +6,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,4 +17,7 @@ public interface PartnerOrderRepository extends JpaRepository<PartnerOrder, Long
     Optional<PartnerOrder> findByIdAndPartnerId(Long id, Long partnerId);
 
     List<PartnerOrder> findByOrderId(Long orderId);
+
+    List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtBetween(
+            Long partnerId, PartnerOrderStatus status, LocalDateTime start, LocalDateTime end);
 }

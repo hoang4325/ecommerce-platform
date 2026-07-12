@@ -81,10 +81,23 @@ public class CheckoutService {
         if (!requestHash.equals(stored.hash())) throw new ConflictException("idempotency_key_payload_mismatch");
         if ("COMPLETED".equals(stored.status())) return read(stored.response(), CheckoutResponseDTO.class);
 
-        List<CartLine> lines = jdbc.query("SELECT p.id,p.name,p.price,ci.quantity,p.on_hand_quantity,p.reserved_quantity,p.active " +
-                        "FROM cart_items ci JOIN products p ON p.id=ci.product_id WHERE ci.cart_id=? ORDER BY p.id FOR UPDATE",
-                (rs, n) -> new CartLine(rs.getLong(1), rs.getString(2), rs.getBigDecimal(3), rs.getInt(4),
-                        rs.getInt(5), rs.getInt(6), rs.getBoolean(7)), user.getCart().getId());
+        List<CartLine> lines = jdbc.query(
+                "SELECT ci.product_id,COALESCE(p.name,'') AS name," +
+                "       COALESCE(po.price,p.price) AS price," +
+                "       ci.quantity," +
+                "       CASE WHEN ci.offer_id IS NOT NULL THEN po.on_hand_quantity ELSE p.on_hand_quantity END AS on_hand," +
+                "       CASE WHEN ci.offer_id IS NOT NULL THEN po.reserved_quantity ELSE p.reserved_quantity END AS reserved," +
+                "       CASE WHEN ci.offer_id IS NOT NULL THEN (po.status='APPROVED' AND p.active) ELSE p.active END AS active," +
+                "       ci.offer_id,ci.partner_id " +
+                "FROM cart_items ci " +
+                "JOIN products p ON p.id=ci.product_id " +
+                "LEFT JOIN partner_offers po ON po.id=ci.offer_id " +
+                "WHERE ci.cart_id=? ORDER BY ci.id FOR UPDATE",
+                (rs, n) -> new CartLine(
+                        rs.getLong(1), rs.getString(2), rs.getBigDecimal(3), rs.getInt(4),
+                        rs.getInt(5), rs.getInt(6), rs.getBoolean(7),
+                        rs.getObject(8, Long.class), rs.getObject(9, Long.class)),
+                user.getCart().getId());
         if (lines.isEmpty()) throw new ConflictException("cart_is_empty");
         for (CartLine line : lines) {
             if (!line.active() || line.quantity() <= 0 || line.onHand() - line.reserved() < line.quantity()) {
@@ -111,12 +124,22 @@ public class CheckoutService {
 
         for (CartLine line : lines) {
             BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
-            jdbc.update("INSERT INTO order_items(order_id,product_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift) VALUES (?,?,?,?,?,?,?,false)",
-                    order.getId(), line.productId(), line.name(), money(line.price()), line.quantity(), lineTotal, lineTotal);
-            int changed = jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity+?,version=version+1 " +
-                            "WHERE id=? AND active=true AND on_hand_quantity-reserved_quantity>=?",
-                    line.quantity(), line.productId(), line.quantity());
-            if (changed != 1) throw new InsufficientStockException();
+            BigDecimal qualifying = lineTotal;
+            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift) VALUES (?,?,?,?,?,?,?,?,?,false)",
+                    order.getId(), line.productId(), line.offerId(), line.partnerId(), line.name(),
+                    money(line.price()), line.quantity(), lineTotal, qualifying);
+            if (line.offerId() != null) {
+                int changed = jdbc.update(
+                        "UPDATE partner_offers SET reserved_quantity=reserved_quantity+?,version=version+1 " +
+                        "WHERE id=? AND status='APPROVED' AND on_hand_quantity-reserved_quantity>=?",
+                        line.quantity(), line.offerId(), line.quantity());
+                if (changed != 1) throw new InsufficientStockException();
+            } else {
+                int changed = jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity+?,version=version+1 " +
+                                "WHERE id=? AND active=true AND on_hand_quantity-reserved_quantity>=?",
+                        line.quantity(), line.productId(), line.quantity());
+                if (changed != 1) throw new InsufficientStockException();
+            }
             jdbc.update("INSERT INTO inventory_reservations(product_id,order_id,quantity,status,expires_at,idempotency_key) VALUES (?,?,?,'RESERVED',?,?)",
                     line.productId(), order.getId(), line.quantity(), expiresAt, "inventory:reserve:" + order.getId() + ":" + line.productId());
         }
@@ -202,6 +225,10 @@ public class CheckoutService {
                     return null;
                 }, orderId);
         jdbc.update("UPDATE inventory_reservations SET status='EXPIRED',version=version+1,updated_at=CURRENT_TIMESTAMP(6) WHERE order_id=? AND status='RESERVED'", orderId);
+        jdbc.query("SELECT offer_id,quantity FROM order_items WHERE order_id=? AND offer_id IS NOT NULL FOR UPDATE",
+                rs -> { while (rs.next()) jdbc.update(
+                        "UPDATE partner_offers SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",
+                        rs.getInt(2), rs.getLong(1), rs.getInt(2)); return null; }, orderId);
 
         jdbc.query("SELECT id,promotion_id,user_id FROM promotion_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE", rs -> {
             while (rs.next()) {
@@ -334,6 +361,15 @@ public class CheckoutService {
             return null;
         }, order.getId());
         jdbc.update("UPDATE inventory_reservations SET status='COMMITTED',version=version+1,updated_at=CURRENT_TIMESTAMP(6) WHERE order_id=? AND status='RESERVED'", order.getId());
+        jdbc.query("SELECT offer_id,partner_id,product_id,quantity FROM order_items WHERE order_id=? AND offer_id IS NOT NULL FOR UPDATE",
+                rs -> { while (rs.next()) {
+                    int changed = jdbc.update(
+                            "UPDATE partner_offers SET on_hand_quantity=on_hand_quantity-?,reserved_quantity=reserved_quantity-?,version=version+1 " +
+                            "WHERE id=? AND on_hand_quantity>=? AND reserved_quantity>=?",
+                            rs.getInt(4), rs.getInt(4), rs.getLong(1), rs.getInt(4), rs.getInt(4));
+                    if (changed != 1) throw new ConflictException("offer_inventory_commit_conflict");
+                } return null; }, order.getId());
+        createPartnerOrders(order.getId());
         jdbc.query("SELECT promotion_id,user_id FROM promotion_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE", rs -> {
             while (rs.next()) jdbc.update("UPDATE promotion_usage_counters SET reserved_orders=reserved_orders-1,consumed_orders=consumed_orders+1,version=version+1 WHERE promotion_id=? AND user_id=? AND reserved_orders>0", rs.getLong(1), rs.getLong(2));
             return null;
@@ -368,9 +404,46 @@ public class CheckoutService {
                 userId,order.getId(),qualifying,order.getCurrency(),externalPaymentId,"spend:qualified:"+order.getId());
     }
 
+    private void createPartnerOrders(Long orderId) {
+        jdbc.query("SELECT partner_id,SUM(line_total) AS subtotal,currency " +
+                    "FROM order_items WHERE order_id=? AND partner_id IS NOT NULL GROUP BY partner_id FOR UPDATE",
+                rs -> {
+                    while (rs.next()) {
+                        Long partnerId = rs.getLong(1);
+                        BigDecimal subtotal = rs.getBigDecimal(2);
+                        String currency = rs.getString(3);
+
+                        BigDecimal commissionAmount = BigDecimal.ZERO;
+                        java.util.List<java.util.Map<String, Object>> rules = jdbc.query(
+                                "SELECT rate,fixed_fee FROM commission_rules WHERE status='ACTIVE' " +
+                                "AND (partner_id IS NULL OR partner_id=?) " +
+                                "AND (valid_from IS NULL OR valid_from<=CURRENT_TIMESTAMP(6)) " +
+                                "AND (valid_to IS NULL OR valid_to>=CURRENT_TIMESTAMP(6)) " +
+                                "ORDER BY CASE WHEN product_id IS NOT NULL THEN 0 WHEN category_id IS NOT NULL THEN 1 WHEN partner_id IS NOT NULL THEN 2 ELSE 3 END," +
+                                "priority DESC,valid_from DESC,id LIMIT 1",
+                                (row, n) -> java.util.Map.of("rate", row.getBigDecimal("rate"), "fee", row.getBigDecimal("fixed_fee")),
+                                partnerId);
+                        if (!rules.isEmpty()) {
+                            BigDecimal rate = (BigDecimal) rules.get(0).get("rate");
+                            BigDecimal fixedFee = (BigDecimal) rules.get(0).get("fee");
+                            commissionAmount = subtotal.multiply(rate).add(fixedFee != null ? fixedFee : BigDecimal.ZERO);
+                            commissionAmount = commissionAmount.setScale(2, java.math.RoundingMode.HALF_UP);
+                        }
+
+                        BigDecimal payable = subtotal.subtract(commissionAmount).max(BigDecimal.ZERO);
+                        jdbc.update("INSERT INTO partner_orders(order_id,partner_id,status,subtotal,discount_allocation,shipping_allocation,commission_amount,partner_payable_amount,currency,version,created_at,updated_at) " +
+                                    "VALUES (?,?,'NEW',?,0,0,?,?,?,0,NOW(),NOW())",
+                                orderId, partnerId, subtotal, commissionAmount, payable, currency);
+                    }
+                    return null;
+                }, orderId);
+    }
+
     private void releaseReservations(Long orderId) {
         jdbc.query("SELECT product_id,quantity FROM inventory_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE", rs->{while(rs.next()) jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",rs.getInt(2),rs.getLong(1),rs.getInt(2));return null;},orderId);
         jdbc.update("UPDATE inventory_reservations SET status='RELEASED',version=version+1 WHERE order_id=? AND status='RESERVED'",orderId);
+        jdbc.query("SELECT offer_id,quantity FROM order_items WHERE order_id=? AND offer_id IS NOT NULL FOR UPDATE",
+                rs->{while(rs.next()) jdbc.update("UPDATE partner_offers SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",rs.getInt(2),rs.getLong(1),rs.getInt(2));return null;},orderId);
         jdbc.query("SELECT promotion_id,user_id FROM promotion_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE",rs->{while(rs.next()){jdbc.update("UPDATE promotions SET remaining_usage=CASE WHEN remaining_usage IS NULL THEN NULL ELSE remaining_usage+1 END,version=version+1 WHERE id=?",rs.getLong(1));jdbc.update("UPDATE promotion_usage_counters SET reserved_orders=reserved_orders-1,version=version+1 WHERE promotion_id=? AND user_id=? AND reserved_orders>0",rs.getLong(1),rs.getLong(2));}return null;},orderId);
         jdbc.update("UPDATE promotion_reservations SET status='RELEASED',version=version+1 WHERE order_id=? AND status='RESERVED'",orderId);
         jdbc.query("SELECT id,account_id,total_points,currency FROM point_reservations WHERE order_id=? AND status='PENDING_PAYMENT' FOR UPDATE",rs->{if(!rs.next())return null;long rid=rs.getLong(1),aid=rs.getLong(2);int total=rs.getInt(3);String currency=rs.getString(4);int returned=jdbc.queryForObject("SELECT COALESCE(SUM(a.reserved_points),0) FROM point_reservation_allocations a JOIN point_lots l ON l.id=a.point_lot_id WHERE a.reservation_id=? AND l.expires_at>CURRENT_TIMESTAMP(6)",Integer.class,rid);jdbc.update("UPDATE point_lots l JOIN point_reservation_allocations a ON a.point_lot_id=l.id SET l.remaining_points=l.remaining_points+a.reserved_points,l.version=l.version+1 WHERE a.reservation_id=? AND l.expires_at>CURRENT_TIMESTAMP(6)",rid);jdbc.update("UPDATE loyalty_accounts SET available_points=available_points+?,reserved_points=reserved_points-?,version=version+1 WHERE id=? AND reserved_points>=?",returned,total,aid,total);jdbc.update("UPDATE point_reservations SET status=?,version=version+1 WHERE id=? AND status='PENDING_PAYMENT'",returned==0?"EXPIRED":"RELEASED",rid);if(returned>0)jdbc.update("INSERT INTO loyalty_transactions(account_id,order_id,reservation_id,transaction_type,points,value,currency,balance_after,idempotency_key) SELECT ?,?,?,'RELEASED',?,0,?,available_points,? FROM loyalty_accounts WHERE id=?",aid,orderId,rid,returned,currency,"loyalty:released:"+rid,aid);return null;},orderId);
@@ -416,7 +489,7 @@ public class CheckoutService {
     }
 
     private record RequestRow(String hash, String status, String response) {}
-    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active) {}
+    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active, Long offerId, Long partnerId) {}
     private record Promotion(long id, BigDecimal discount) {}
     private record Account(long id, int available, int reserved) {}
     private record Lot(long id, int remaining) {}

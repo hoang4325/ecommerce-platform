@@ -30,6 +30,7 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+import jakarta.persistence.Column;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -54,6 +55,18 @@ public class CartItem extends BaseEntity {
     @ManyToOne
     @JoinColumn(name = "product_id")
     private Product product;
+
+    /**
+     * Optional partner offer reference.
+     */
+    @Column(name = "offer_id")
+    private Long offerId;
+
+    /**
+     * Optional partner ID (denormalized from offer for query convenience).
+     */
+    @Column(name = "partner_id")
+    private Long partnerId;
 
     /**
      * Cart Item's name.
