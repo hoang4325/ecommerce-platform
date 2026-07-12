@@ -31,7 +31,14 @@ public interface PartnerOrderRepository extends JpaRepository<PartnerOrder, Long
             @Param("periodStart") LocalDateTime periodStart,
             @Param("periodEnd") LocalDateTime periodEnd);
 
+    @Query("SELECT po FROM PartnerOrder po WHERE po.partner.id = :partnerId AND po.status = :status AND po.settlementStatus = 'UNSETTLED' AND po.deliveredAt >= :periodStart AND po.deliveredAt < :periodEnd")
+    List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
+            @Param("partnerId") Long partnerId,
+            @Param("status") PartnerOrderStatus status,
+            @Param("periodStart") LocalDateTime periodStart,
+            @Param("periodEnd") LocalDateTime periodEnd);
+
     @Modifying
-    @Query("UPDATE PartnerOrder po SET po.settlementStatus = 'SETTLED', po.settlementId = :settlementId WHERE po.id IN :orderIds")
+    @Query("UPDATE PartnerOrder po SET po.settlementStatus = 'SETTLED', po.settlementId = :settlementId WHERE po.id IN :orderIds AND po.settlementStatus = 'UNSETTLED'")
     int markAsSettled(@Param("settlementId") Long settlementId, @Param("orderIds") List<Long> orderIds);
 }

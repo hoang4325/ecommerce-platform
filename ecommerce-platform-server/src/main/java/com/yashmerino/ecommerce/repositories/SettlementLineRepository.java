@@ -12,4 +12,7 @@ public interface SettlementLineRepository extends JpaRepository<SettlementLine, 
 
     @Transactional
     void deleteBySettlementId(Long settlementId);
+
+    @Transactional
+    void deleteBySettlementIdAndLineType(Long settlementId, String lineType);
 }
