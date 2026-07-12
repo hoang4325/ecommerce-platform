@@ -90,18 +90,29 @@ public class CheckoutService {
                 "       ci.quantity," +
                 "       CASE WHEN ci.offer_id IS NOT NULL THEN po.on_hand_quantity ELSE p.on_hand_quantity END AS on_hand," +
                 "       CASE WHEN ci.offer_id IS NOT NULL THEN po.reserved_quantity ELSE p.reserved_quantity END AS reserved," +
-                "       CASE WHEN ci.offer_id IS NOT NULL THEN (po.status='APPROVED' AND p.active) ELSE p.active END AS active," +
-                "       ci.offer_id,ci.partner_id " +
+                "       CASE WHEN ci.offer_id IS NOT NULL THEN (po.status='APPROVED' AND p.active AND pr.status='APPROVED') ELSE p.active END AS active," +
+                "       ci.offer_id,ci.partner_id," +
+                "       COALESCE(po.partner_sku,p.sku) AS partner_sku," +
+                "       COALESCE(pr.name,'') AS partner_name " +
                 "FROM cart_items ci " +
                 "JOIN products p ON p.id=ci.product_id " +
                 "LEFT JOIN partner_offers po ON po.id=ci.offer_id " +
+                "LEFT JOIN partners pr ON pr.id=ci.partner_id " +
                 "WHERE ci.cart_id=? ORDER BY ci.id FOR UPDATE",
                 (rs, n) -> new CartLine(
                         rs.getLong(1), rs.getString(2), rs.getBigDecimal(3), rs.getInt(4),
                         rs.getInt(5), rs.getInt(6), rs.getBoolean(7),
-                        rs.getObject(8, Long.class), rs.getObject(9, Long.class)),
+                        rs.getObject(8, Long.class), rs.getObject(9, Long.class),
+                        rs.getString(10), rs.getString(11)),
                 user.getCart().getId());
         if (lines.isEmpty()) throw new ConflictException("cart_is_empty");
+        lines.sort((a, b) -> {
+            Long ao = a.offerId(), bo = b.offerId();
+            if (ao == null && bo == null) return 0;
+            if (ao == null) return 1;
+            if (bo == null) return -1;
+            return ao.compareTo(bo);
+        });
         for (CartLine line : lines) {
             if (!line.active() || line.quantity() <= 0 || line.onHand() - line.reserved() < line.quantity()) {
                 throw new InsufficientStockException();
@@ -128,9 +139,9 @@ public class CheckoutService {
         for (CartLine line : lines) {
             BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
             BigDecimal qualifying = lineTotal;
-            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift) VALUES (?,?,?,?,?,?,?,?,?,false)",
+            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift,currency,partner_name) VALUES (?,?,?,?,?,?,?,?,?,false,?,?)",
                     order.getId(), line.productId(), line.offerId(), line.partnerId(), line.name(),
-                    money(line.price()), line.quantity(), lineTotal, qualifying);
+                    money(line.price()), line.quantity(), lineTotal, qualifying, currency, line.partnerName());
             if (line.offerId() != null) {
                 int changed = jdbc.update(
                         "UPDATE partner_offers SET reserved_quantity=reserved_quantity+?,version=version+1 " +
@@ -147,7 +158,7 @@ public class CheckoutService {
             jdbc.update("INSERT INTO inventory_reservations(product_id,order_id,quantity,status,expires_at,inventory_source_type,offer_id,idempotency_key) VALUES (?,?,?,'RESERVED',?,?,?,?)",
                     line.productId(), order.getId(), line.quantity(), expiresAt,
                     sourceType, line.offerId(),
-                    "inventory:reserve:" + order.getId() + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : 0L));
+                    "inventory:reserve:" + order.getId() + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : "0"));
         }
         if (promotion != null) {
             jdbc.update("INSERT INTO promotion_reservations(promotion_id,user_id,order_id,discount_amount,status,expires_at,idempotency_key) VALUES (?,?,?,?,'RESERVED',?,?)",
@@ -450,7 +461,7 @@ public class CheckoutService {
             jdbc.update("UPDATE order_items SET " +
                             "commission_rule_id=?,commission_rate=?,commission_fixed_fee=?," +
                             "commission_amount=?,partner_payable_amount=? " +
-                            "WHERE order_id=? AND product_id=? AND COALESCE(offer_id,0)=COALESCE(?,0)",
+                            "WHERE order_id=? AND product_id=? AND (offer_id <=> ?)",
                     r.commissionRuleId(), r.rate(), r.fixedFee(),
                     r.commissionAmount(), r.partnerPayable(),
                     orderId, r.productId(), r.offerId());
@@ -508,60 +519,6 @@ public class CheckoutService {
         }
     }
 
-    private void createPartnerOrders(Long orderId) {
-        List<CommissionService.CommissionRequest> requests = jdbc.query(
-                "SELECT oi.product_id,oi.offer_id,oi.partner_id,oi.line_total,o.currency," +
-                "       (SELECT MIN(pc.categories_id) FROM products_categories pc WHERE pc.product_id=oi.product_id) AS category_id " +
-                "FROM order_items oi " +
-                "JOIN orders o ON o.id=oi.order_id " +
-                "WHERE oi.order_id=? AND oi.partner_id IS NOT NULL FOR UPDATE",
-                (rs, n) -> new CommissionService.CommissionRequest(
-                        rs.getLong("product_id"),
-                        rs.getObject("offer_id", Long.class),
-                        rs.getObject("category_id", Long.class),
-                        rs.getLong("partner_id"),
-                        rs.getBigDecimal("line_total"),
-                        rs.getString("currency")),
-                orderId);
-
-        List<CommissionService.CommissionResult> results = commissionService.resolveOrderItemCommissions(requests);
-
-        for (CommissionService.CommissionResult r : results) {
-            jdbc.update("UPDATE order_items SET " +
-                            "commission_rule_id=?,commission_rate=?,commission_fixed_fee=?," +
-                            "commission_amount=?,partner_payable_amount=? " +
-                            "WHERE order_id=? AND product_id=? AND COALESCE(offer_id,0)=COALESCE(?,0)",
-                    r.commissionRuleId(), r.rate(), r.fixedFee(),
-                    r.commissionAmount(), r.partnerPayable(),
-                    orderId, r.productId(), r.offerId());
-        }
-
-        jdbc.query("SELECT partner_id,SUM(line_total) AS subtotal," +
-                    "SUM(commission_amount) AS total_commission," +
-                    "SUM(partner_payable_amount) AS total_payable,currency " +
-                    "FROM order_items WHERE order_id=? AND partner_id IS NOT NULL " +
-                    "GROUP BY partner_id FOR UPDATE",
-                rs -> {
-                    while (rs.next()) {
-                        Long partnerId = rs.getLong("partner_id");
-                        BigDecimal subtotal = rs.getBigDecimal("subtotal");
-                        BigDecimal commissionAmount = rs.getBigDecimal("total_commission");
-                        BigDecimal payable = rs.getBigDecimal("total_payable");
-                        String currency = rs.getString("currency");
-
-                        jdbc.update("INSERT INTO partner_orders(order_id,partner_id,status,subtotal,discount_allocation,shipping_allocation,commission_amount,partner_payable_amount,currency,settlement_status,version,created_at,updated_at) " +
-                                    "VALUES (?,?,'NEW',?,0,0,?,?,?,?,'UNSETTLED',0,NOW(),NOW())",
-                                orderId, partnerId, subtotal, commissionAmount, payable, currency);
-                    }
-                    return null;
-                }, orderId);
-
-        jdbc.update("UPDATE order_items oi " +
-                    "JOIN partner_orders po ON po.order_id=oi.order_id AND po.partner_id=oi.partner_id " +
-                    "SET oi.partner_order_id=po.id " +
-                    "WHERE oi.order_id=?", orderId);
-    }
-
     private void releaseReservations(Long orderId) {
         jdbc.query("SELECT product_id,offer_id,quantity,inventory_source_type FROM inventory_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE",
                 rs->{while(rs.next()){String st=rs.getString("inventory_source_type");int q=rs.getInt("quantity");if("OFFER".equals(st)){long oid=rs.getLong("offer_id");jdbc.update("UPDATE partner_offers SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",q,oid,q);}else{long pid=rs.getLong("product_id");jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",q,pid,q);}}return null;},orderId);
@@ -611,7 +568,7 @@ public class CheckoutService {
     }
 
     private record RequestRow(String hash, String status, String response) {}
-    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active, Long offerId, Long partnerId) {}
+    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active, Long offerId, Long partnerId, String partnerSku, String partnerName) {}
     private record Promotion(long id, BigDecimal discount) {}
     private record Account(long id, int available, int reserved) {}
     private record Lot(long id, int remaining) {}
