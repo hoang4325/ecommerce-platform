@@ -51,6 +51,12 @@ public class PartnerOrder {
     @Column(nullable = false, length = 3)
     private String currency = "USD";
 
+    @Column(name = "settlement_id")
+    private Long settlementId;
+
+    @Column(name = "settlement_status", length = 20)
+    private String settlementStatus = "UNSETTLED";
+
     @Column(name = "accepted_at")
     private LocalDateTime acceptedAt;
 

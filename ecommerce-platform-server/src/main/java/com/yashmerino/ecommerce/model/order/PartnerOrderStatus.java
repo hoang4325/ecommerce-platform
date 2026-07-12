@@ -1,6 +1,7 @@
 package com.yashmerino.ecommerce.model.order;
 
 public enum PartnerOrderStatus {
+    AWAITING_PAYMENT,
     NEW,
     ACCEPTED,
     REJECTED,

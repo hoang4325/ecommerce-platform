@@ -1,5 +1,6 @@
 package com.yashmerino.ecommerce.services;
 
+import com.yashmerino.ecommerce.exceptions.ConflictException;
 import com.yashmerino.ecommerce.exceptions.InvalidInputException;
 import com.yashmerino.ecommerce.model.dto.order.PartnerOrderResponse;
 import com.yashmerino.ecommerce.model.order.PartnerOrder;
@@ -11,10 +12,18 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -22,6 +31,39 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
 
     private final PartnerOrderRepository partnerOrderRepository;
     private final PartnerAuthorizationService authz;
+    private final JdbcTemplate jdbc;
+    private final OutboxService outboxService;
+
+    private static final RowMapper<PartnerOrderRow> ROW_MAPPER = (rs, n) -> {
+        PartnerOrderStatus status;
+        try {
+            status = PartnerOrderStatus.valueOf(rs.getString("status"));
+        } catch (IllegalArgumentException e) {
+            status = PartnerOrderStatus.NEW;
+        }
+        return new PartnerOrderRow(
+                rs.getLong("id"),
+                rs.getLong("order_id"),
+                rs.getLong("partner_id"),
+                status,
+                rs.getLong("version"),
+                rs.getBigDecimal("subtotal"),
+                rs.getBigDecimal("discount_allocation"),
+                rs.getBigDecimal("shipping_allocation"),
+                rs.getBigDecimal("commission_amount"),
+                rs.getBigDecimal("partner_payable_amount"),
+                rs.getString("currency"),
+                nullableTimestamp(rs, "accepted_at"),
+                nullableTimestamp(rs, "rejected_at"),
+                rs.getString("rejection_reason"),
+                nullableTimestamp(rs, "packed_at"),
+                nullableTimestamp(rs, "ready_to_ship_at"),
+                nullableTimestamp(rs, "shipped_at"),
+                nullableTimestamp(rs, "delivered_at"),
+                nullableTimestamp(rs, "cancelled_at"),
+                rs.getString("cancel_reason"),
+                rs.getTimestamp("created_at").toLocalDateTime());
+    };
 
     @Override
     @Transactional(readOnly = true)
@@ -34,141 +76,287 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional(readOnly = true)
     public PartnerOrderResponse getPartnerOrder(Long partnerId, Long partnerOrderId) {
         authz.requireOrderRead(partnerId);
-        PartnerOrder po = partnerOrderRepository.findByIdAndPartnerId(partnerOrderId, partnerId)
-                .orElseThrow(() -> new EntityNotFoundException("partner_order_not_found"));
-        return PartnerOrderResponse.from(po);
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse acceptOrder(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.NEW) {
+        if (row.status() == PartnerOrderStatus.ACCEPTED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.NEW) {
             throw new InvalidInputException("cannot_accept_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.ACCEPTED);
-        po.setAcceptedAt(LocalDateTime.now());
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, accepted_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.ACCEPTED.name(), partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_ACCEPTED", "partner.order.accepted", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "ACCEPTED"),
+                "partner-order:accept:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse rejectOrder(Long partnerId, Long partnerOrderId, String reason) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.NEW) {
+        if (row.status() == PartnerOrderStatus.REJECTED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.NEW) {
             throw new InvalidInputException("cannot_reject_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.REJECTED);
-        po.setRejectedAt(LocalDateTime.now());
-        po.setRejectionReason(reason);
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, rejected_at=NOW(), rejection_reason=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.REJECTED.name(), reason, partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_REJECTED", "partner.order.rejected", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "REJECTED", "reason", reason),
+                "partner-order:reject:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse markPacking(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.ACCEPTED) {
+        if (row.status() == PartnerOrderStatus.PACKING) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.ACCEPTED) {
             throw new InvalidInputException("cannot_mark_packing_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.PACKING);
-        po.setPackedAt(LocalDateTime.now());
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, packed_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.PACKING.name(), partnerOrderId, PartnerOrderStatus.ACCEPTED.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_PACKING", "partner.order.packing", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "PACKING"),
+                "partner-order:packing:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.PACKING) {
+        if (row.status() == PartnerOrderStatus.READY_TO_SHIP) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.PACKING) {
             throw new InvalidInputException("cannot_mark_ready_to_ship_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.READY_TO_SHIP);
-        po.setReadyToShipAt(LocalDateTime.now());
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, ready_to_ship_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.READY_TO_SHIP.name(), partnerOrderId, PartnerOrderStatus.PACKING.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_READY_TO_SHIP", "partner.order.ready-to-ship", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "READY_TO_SHIP"),
+                "partner-order:ready-to-ship:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.READY_TO_SHIP) {
+        if (row.status() == PartnerOrderStatus.SHIPPED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.READY_TO_SHIP) {
             throw new InvalidInputException("cannot_ship_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.SHIPPED);
-        po.setShippedAt(LocalDateTime.now());
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, shipped_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.SHIPPED.name(), partnerOrderId, PartnerOrderStatus.READY_TO_SHIP.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_SHIPPED", "partner.order.shipped", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "SHIPPED"),
+                "partner-order:shipped:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.SHIPPED) {
+        if (row.status() == PartnerOrderStatus.DELIVERED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.SHIPPED) {
             throw new InvalidInputException("cannot_deliver_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.DELIVERED);
-        po.setDeliveredAt(LocalDateTime.now());
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, delivered_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.DELIVERED.name(), partnerOrderId, PartnerOrderStatus.SHIPPED.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_DELIVERED", "partner.order.delivered", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "DELIVERED"),
+                "partner-order:delivered:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.NEW
-                && po.getStatus() != PartnerOrderStatus.ACCEPTED) {
+        if (row.status() == PartnerOrderStatus.CANCELLED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.NEW && row.status() != PartnerOrderStatus.ACCEPTED) {
             throw new InvalidInputException("cannot_cancel_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.CANCELLED);
-        po.setCancelledAt(LocalDateTime.now());
-        po.setCancelReason(reason);
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        String currentStatus = row.status().name();
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, cancelled_at=NOW(), cancel_reason=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.CANCELLED.name(), reason, partnerOrderId, currentStatus, row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_CANCELLED", "partner.order.cancelled", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "CANCELLED", "reason", reason),
+                "partner-order:cancel:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.DELIVERED) {
+        if (row.status() == PartnerOrderStatus.RETURN_REQUESTED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.DELIVERED) {
             throw new InvalidInputException("cannot_request_return_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.RETURN_REQUESTED);
-        po.setCancelReason(reason);
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, cancel_reason=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.RETURN_REQUESTED.name(), reason, partnerOrderId, PartnerOrderStatus.DELIVERED.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_RETURN_REQUESTED", "partner.order.return-requested", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "RETURN_REQUESTED", "reason", reason),
+                "partner-order:return-request:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
     @Override
     @Transactional
     public PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId) {
         authz.requireOrderFulfillment(partnerId);
-        PartnerOrder po = findOwned(partnerId, partnerOrderId);
+        PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
 
-        if (po.getStatus() != PartnerOrderStatus.RETURN_REQUESTED) {
+        if (row.status() == PartnerOrderStatus.RETURNED) {
+            return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        }
+        if (row.status() != PartnerOrderStatus.RETURN_REQUESTED) {
             throw new InvalidInputException("cannot_approve_return_in_current_status");
         }
-        po.setStatus(PartnerOrderStatus.RETURNED);
-        return PartnerOrderResponse.from(partnerOrderRepository.save(po));
+
+        int updated = jdbc.update(
+                "UPDATE partner_orders SET status=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
+                PartnerOrderStatus.RETURNED.name(), partnerOrderId, PartnerOrderStatus.RETURN_REQUESTED.name(), row.version());
+        if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
+                "PARTNER_ORDER_RETURNED", "partner.order.returned", partnerOrderId.toString(),
+                Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "RETURNED"),
+                "partner-order:approve-return:" + partnerOrderId);
+
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
     }
 
-    private PartnerOrder findOwned(Long partnerId, Long partnerOrderId) {
+    private PartnerOrderRow selectForUpdate(Long partnerId, Long partnerOrderId) {
+        return jdbc.query(
+                "SELECT id, order_id, partner_id, status, version, subtotal, discount_allocation, " +
+                "shipping_allocation, commission_amount, partner_payable_amount, currency, " +
+                "accepted_at, rejected_at, rejection_reason, packed_at, ready_to_ship_at, " +
+                "shipped_at, delivered_at, cancelled_at, cancel_reason, created_at " +
+                "FROM partner_orders WHERE id=? AND partner_id=? FOR UPDATE",
+                ROW_MAPPER, partnerOrderId, partnerId)
+                .stream()
+                .findFirst()
+                .orElseThrow(() -> new EntityNotFoundException("partner_order_not_found"));
+    }
+
+    private PartnerOrder fetchEntity(Long partnerId, Long partnerOrderId) {
         return partnerOrderRepository.findByIdAndPartnerId(partnerOrderId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("partner_order_not_found"));
     }
+
+    private static LocalDateTime nullableTimestamp(ResultSet rs, String column) throws SQLException {
+        Timestamp ts = rs.getTimestamp(column);
+        return ts != null ? ts.toLocalDateTime() : null;
+    }
+
+    record PartnerOrderRow(
+            Long id,
+            Long orderId,
+            Long partnerId,
+            PartnerOrderStatus status,
+            Long version,
+            BigDecimal subtotal,
+            BigDecimal discountAllocation,
+            BigDecimal shippingAllocation,
+            BigDecimal commissionAmount,
+            BigDecimal partnerPayableAmount,
+            String currency,
+            LocalDateTime acceptedAt,
+            LocalDateTime rejectedAt,
+            String rejectionReason,
+            LocalDateTime packedAt,
+            LocalDateTime readyToShipAt,
+            LocalDateTime shippedAt,
+            LocalDateTime deliveredAt,
+            LocalDateTime cancelledAt,
+            String cancelReason,
+            LocalDateTime createdAt) {}
 }

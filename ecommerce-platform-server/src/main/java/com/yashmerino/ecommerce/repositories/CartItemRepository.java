@@ -32,6 +32,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
 /**
  * Cart Items' repository.
  */
@@ -43,4 +45,6 @@ public interface CartItemRepository extends JpaRepository<CartItem, Long> {
     java.math.BigDecimal getTotalPriceByUsername(@Param("username") String username);
 
     void deleteByCartId(final Long cartId);
+
+    Optional<CartItem> findByCartIdAndProductIdAndOfferId(Long cartId, Long productId, long offerId);
 }

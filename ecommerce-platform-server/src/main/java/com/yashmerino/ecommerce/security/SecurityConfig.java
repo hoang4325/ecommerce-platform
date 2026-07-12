@@ -195,6 +195,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/partners/applications").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/partners/me/**").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/api/partners/me").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/partners/me/submit").authenticated()
+                        .requestMatchers(HttpMethod.GET, "/api/partners/me/status").authenticated()
                         .requestMatchers(PARTNER_ALL_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
                         .requestMatchers(PARTNER_OFFER_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
                         .requestMatchers(PARTNER_ORDER_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())

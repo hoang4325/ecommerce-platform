@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.*;
 @RestController
 @RequestMapping("/api/admin/partners")
 @RequiredArgsConstructor
-public class PartnerAdminController {
+public class AdminPartnerController {
 
     private final PartnerService partnerService;
 
@@ -22,14 +22,15 @@ public class PartnerAdminController {
         return ResponseEntity.ok(partnerService.getAllPartners(pageable));
     }
 
+    @GetMapping("/status/{status}")
+    public ResponseEntity<Page<PartnerResponse>> getPartnersByStatus(@PathVariable String status,
+                                                                       Pageable pageable) {
+        return ResponseEntity.ok(partnerService.getPartnersByStatus(status, pageable));
+    }
+
     @GetMapping("/{partnerId}")
     public ResponseEntity<PartnerResponse> getPartner(@PathVariable Long partnerId) {
         return ResponseEntity.ok(partnerService.getPartner(partnerId));
-    }
-
-    @GetMapping("/status/{status}")
-    public ResponseEntity<Page<PartnerResponse>> getPartnersByStatus(@PathVariable String status, Pageable pageable) {
-        return ResponseEntity.ok(partnerService.getPartnersByStatus(status, pageable));
     }
 
     @PostMapping("/{partnerId}/approve")

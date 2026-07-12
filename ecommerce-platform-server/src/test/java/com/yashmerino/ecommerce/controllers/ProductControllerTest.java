@@ -95,7 +95,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void addValidProductTest() throws Exception {
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -123,7 +123,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void getProductTest() throws Exception {
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -147,7 +147,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void getAllProductsTest() throws Exception {
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -157,7 +157,7 @@ class ProductControllerTest {
         productDTO.setPrice(1.25);
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -210,7 +210,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void deleteProductTest() throws Exception {
         mvc.perform(delete("/api/product/1")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_deleted_successfully"));
@@ -225,7 +225,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void deleteNonexistentProductTest() throws Exception {
         mvc.perform(delete("/api/product/99999")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.status").value(404))
                 .andExpect(jsonPath("$.error").value("Product couldn't be found!"));
@@ -242,7 +242,7 @@ class ProductControllerTest {
         productDTO.setName("");
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name' && @.message == 'name_invalid_length')]").exists())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name' && @.message == 'name_is_required')]").exists());
@@ -259,7 +259,7 @@ class ProductControllerTest {
         productDTO.setPrice(0.0);
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[0].field").value("price"))
                 .andExpect(jsonPath("$.fieldErrors[0].message").value("price_value_error"));
@@ -277,7 +277,7 @@ class ProductControllerTest {
         productDTO.setName("");
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'price' && @.message == 'price_value_error')]").exists())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name' && @.message == 'name_is_required')]").exists());
@@ -302,7 +302,7 @@ class ProductControllerTest {
         productDTO.setCategories(new LinkedHashSet<>(Arrays.asList(digitalServices, cosmeticsAndBodyCare)));
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -328,7 +328,7 @@ class ProductControllerTest {
         productDTO.setName("geragaergaerghawrighaerwuighaerghaerghaerghaerjighaerwuighaerghaerghghaerwuighaerghaerghaerghaerjighaerwughaerwuighaerghaerghaerghaerjighaerwughaerwuighaerghaerghaerghaerjighaerwughaerwuighaerghaerghaerghaerjighaerwughaerwuighaerghaerghaerghaerjighaerwughaerwuighaerghaerghaerghaerjighaerwuaerghaerjighaerwuighaerghaerghaerghaerjighaerwuighaerghaerghaerghaerjighaerwuighaerghaerghaerghaerjygfaerjygfawjfgawefgaewyfagrjyaerjyaergfjyargfjyarwgyjfa");
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[0].field").value("name"))
                 .andExpect(jsonPath("$.fieldErrors[0].message").value("name_invalid_length"));
@@ -343,7 +343,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void getAllSellerProductsTest() throws Exception {
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -353,7 +353,7 @@ class ProductControllerTest {
         productDTO.setPrice(1.25);
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -519,7 +519,7 @@ class ProductControllerTest {
         productDTO.setCategories(new HashSet<>(List.of(digitalServicesCategory)));
 
         mvc.perform(put("/api/product/1")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_updated_successfully"));
@@ -544,7 +544,7 @@ class ProductControllerTest {
         productDTO.setPrice(-5.2);
 
         mvc.perform(put("/api/product/1")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'name' && @.message == 'name_is_required')]").exists())
                 .andExpect(jsonPath("$.fieldErrors[?(@.field == 'price' && @.message == 'price_value_error')]").exists())
@@ -619,7 +619,7 @@ class ProductControllerTest {
                 "123123123123123123123123123123123123123123");
 
         mvc.perform(put("/api/product/1")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.fieldErrors[0].field").value("description"))
                 .andExpect(jsonPath("$.fieldErrors[0].message").value("description_too_long"));
@@ -666,7 +666,7 @@ class ProductControllerTest {
     @WithMockUser(username = "seller", authorities = {"SELLER"})
     void searchProductsTest() throws Exception {
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))
@@ -676,7 +676,7 @@ class ProductControllerTest {
         productDTO.setPrice(1.25);
 
         mvc.perform(post("/api/product")
-                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO))
+                .contentType(APPLICATION_JSON).content(objectMapper.writeValueAsString(productDTO)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value(200))
                 .andExpect(jsonPath("$.message").value("product_added_successfully"))

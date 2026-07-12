@@ -39,18 +39,44 @@ public class SettlementServiceImpl implements SettlementService {
     public SettlementResponse calculateSettlement(Long partnerId, LocalDateTime periodStart,
                                                    LocalDateTime periodEnd, String currency) {
         authz.requireSettlementRead(partnerId);
+        return doCalculateSettlement(partnerId, periodStart, periodEnd, currency);
+    }
 
-        Settlement settlement = new Settlement();
-        settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
-        settlement.getPartner().setId(partnerId);
-        settlement.setPeriodStart(periodStart);
-        settlement.setPeriodEnd(periodEnd);
-        settlement.setCurrency(currency != null ? currency : "USD");
+    @Override
+    @Transactional
+    public SettlementResponse adminCalculateSettlement(Long partnerId, LocalDateTime periodStart,
+                                                        LocalDateTime periodEnd, String currency) {
+        return doCalculateSettlement(partnerId, periodStart, periodEnd, currency);
+    }
+
+    private SettlementResponse doCalculateSettlement(Long partnerId, LocalDateTime periodStart,
+                                                      LocalDateTime periodEnd, String currency) {
+        String resolvedCurrency = currency != null ? currency : "USD";
+
+        Settlement settlement = settlementRepository
+                .findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(partnerId, periodStart, periodEnd, resolvedCurrency)
+                .orElse(null);
+
+        if (settlement != null) {
+            if (settlement.getStatus() == SettlementStatus.PAID) {
+                throw new ConflictException("settlement_already_paid");
+            }
+            settlementLineRepository.deleteBySettlementId(settlement.getId());
+            settlementLineRepository.flush();
+        } else {
+            settlement = new Settlement();
+            settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
+            settlement.getPartner().setId(partnerId);
+            settlement.setPeriodStart(periodStart);
+            settlement.setPeriodEnd(periodEnd);
+            settlement.setCurrency(resolvedCurrency);
+        }
+
         settlement.setStatus(SettlementStatus.CALCULATED);
         settlement = settlementRepository.save(settlement);
 
         List<PartnerOrder> deliveredOrders = partnerOrderRepository
-                .findByPartnerIdAndStatusAndDeliveredAtBetween(
+                .findByPartnerIdAndStatusAndDeliveredAtInRange(
                         partnerId, PartnerOrderStatus.DELIVERED, periodStart, periodEnd);
 
         BigDecimal grossSales = BigDecimal.ZERO;
@@ -68,6 +94,7 @@ public class SettlementServiceImpl implements SettlementService {
             line.setPartnerOrderId(po.getId());
             line.setAmount(po.getSubtotal());
             line.setCurrency(po.getCurrency());
+            line.setIdempotencyKey("settlement-line:" + settlement.getId() + ":" + po.getId());
             settlementLineRepository.save(line);
         }
 
@@ -75,6 +102,11 @@ public class SettlementServiceImpl implements SettlementService {
         settlement.setCommissionAmount(commissionAmount);
         settlement.setPayableAmount(grossSales.subtract(commissionAmount));
         settlement = settlementRepository.save(settlement);
+
+        if (!deliveredOrders.isEmpty()) {
+            List<Long> orderIds = deliveredOrders.stream().map(PartnerOrder::getId).toList();
+            partnerOrderRepository.markAsSettled(settlement.getId(), orderIds);
+        }
 
         return SettlementResponse.from(settlement);
     }
@@ -88,8 +120,22 @@ public class SettlementServiceImpl implements SettlementService {
 
     @Override
     @Transactional(readOnly = true)
+    public Page<SettlementResponse> adminGetSettlements(Long partnerId, Pageable pageable) {
+        return settlementRepository.findByPartnerId(partnerId, pageable).map(SettlementResponse::from);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public SettlementResponse getSettlement(Long partnerId, Long settlementId) {
         authz.requireSettlementRead(partnerId);
+        Settlement settlement = settlementRepository.findByIdAndPartnerId(settlementId, partnerId)
+                .orElseThrow(() -> new EntityNotFoundException("settlement_not_found"));
+        return SettlementResponse.from(settlement);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public SettlementResponse adminGetSettlement(Long partnerId, Long settlementId) {
         Settlement settlement = settlementRepository.findByIdAndPartnerId(settlementId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("settlement_not_found"));
         return SettlementResponse.from(settlement);

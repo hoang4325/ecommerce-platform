@@ -17,10 +17,17 @@ public record PartnerOrderResponse(
         BigDecimal commissionAmount,
         BigDecimal partnerPayableAmount,
         String currency,
+        Long settlementId,
+        String settlementStatus,
         LocalDateTime acceptedAt,
         LocalDateTime rejectedAt,
+        String rejectionReason,
+        LocalDateTime packedAt,
+        LocalDateTime readyToShipAt,
         LocalDateTime shippedAt,
         LocalDateTime deliveredAt,
+        LocalDateTime cancelledAt,
+        String cancelReason,
         LocalDateTime createdAt) {
 
     public static PartnerOrderResponse from(PartnerOrder po) {
@@ -29,7 +36,10 @@ public record PartnerOrderResponse(
                 po.getStatus(), po.getSubtotal(), po.getDiscountAllocation(),
                 po.getShippingAllocation(), po.getCommissionAmount(),
                 po.getPartnerPayableAmount(), po.getCurrency(),
-                po.getAcceptedAt(), po.getRejectedAt(), po.getShippedAt(),
-                po.getDeliveredAt(), po.getCreatedAt());
+                po.getSettlementId(), po.getSettlementStatus(),
+                po.getAcceptedAt(), po.getRejectedAt(), po.getRejectionReason(),
+                po.getPackedAt(), po.getReadyToShipAt(), po.getShippedAt(),
+                po.getDeliveredAt(), po.getCancelledAt(), po.getCancelReason(),
+                po.getCreatedAt());
     }
 }

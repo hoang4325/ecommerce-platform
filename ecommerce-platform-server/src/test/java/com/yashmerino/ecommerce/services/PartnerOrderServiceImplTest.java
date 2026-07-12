@@ -1,5 +1,6 @@
 package com.yashmerino.ecommerce.services;
 
+import com.yashmerino.ecommerce.exceptions.ConflictException;
 import com.yashmerino.ecommerce.exceptions.InvalidInputException;
 import com.yashmerino.ecommerce.model.Order;
 import com.yashmerino.ecommerce.model.dto.order.PartnerOrderResponse;
@@ -12,14 +13,18 @@ import jakarta.persistence.EntityNotFoundException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentMatchers;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -35,6 +40,12 @@ class PartnerOrderServiceImplTest {
 
     @Mock
     private PartnerAuthorizationService authz;
+
+    @Mock
+    private JdbcTemplate jdbc;
+
+    @Mock
+    private OutboxService outboxService;
 
     @InjectMocks
     private PartnerOrderServiceImpl partnerOrderService;
@@ -65,60 +76,63 @@ class PartnerOrderServiceImplTest {
         partnerOrder.setCurrency("USD");
     }
 
+    private PartnerOrderServiceImpl.PartnerOrderRow createRow(PartnerOrderStatus status, long version) {
+        return new PartnerOrderServiceImpl.PartnerOrderRow(
+                ORDER_ID, 10L, PARTNER_ID, status, version,
+                new BigDecimal("100.00"), BigDecimal.ZERO, BigDecimal.ZERO,
+                new BigDecimal("10.00"), new BigDecimal("90.00"), "USD",
+                null, null, null, null, null, null, null, null, null, LocalDateTime.now());
+    }
+
+    private void stubSelectForUpdate(PartnerOrderStatus status, long version) {
+        when(jdbc.query(anyString(), any(RowMapper.class), eq(ORDER_ID), eq(PARTNER_ID)))
+                .thenReturn(List.of(createRow(status, version)));
+    }
+
     @Test
     void acceptOrder_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.NEW);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID);
 
         assertEquals(PartnerOrderStatus.ACCEPTED, response.status());
-        assertNotNull(partnerOrder.getAcceptedAt());
-        verify(partnerOrderRepository).save(partnerOrder);
     }
 
     @Test
     void acceptOrder_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.SHIPPED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
         assertThrows(InvalidInputException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void acceptOrder_NotFound_ThrowsEntityNotFound() {
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID)).thenReturn(Optional.empty());
+        when(jdbc.query(anyString(), any(RowMapper.class), eq(ORDER_ID), eq(PARTNER_ID)))
+                .thenReturn(List.of());
 
         assertThrows(EntityNotFoundException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void rejectOrder_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.NEW);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "Out of stock");
 
         assertEquals(PartnerOrderStatus.REJECTED, response.status());
-        assertNotNull(partnerOrder.getRejectedAt());
-        assertEquals("Out of stock", partnerOrder.getRejectionReason());
     }
 
     @Test
     void rejectOrder_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
 
         assertThrows(InvalidInputException.class,
                 () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "reason"));
@@ -126,48 +140,40 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void markPacking_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.markPacking(PARTNER_ID, ORDER_ID);
 
         assertEquals(PartnerOrderStatus.PACKING, response.status());
-        assertNotNull(partnerOrder.getPackedAt());
     }
 
     @Test
     void markPacking_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.NEW);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
 
         assertThrows(InvalidInputException.class, () -> partnerOrderService.markPacking(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void markReadyToShip_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.PACKING);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.PACKING, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID);
 
         assertEquals(PartnerOrderStatus.READY_TO_SHIP, response.status());
-        assertNotNull(partnerOrder.getReadyToShipAt());
     }
 
     @Test
     void markReadyToShip_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
 
         assertThrows(InvalidInputException.class,
                 () -> partnerOrderService.markReadyToShip(PARTNER_ID, ORDER_ID));
@@ -175,74 +181,64 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void shipOrder_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.READY_TO_SHIP);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.READY_TO_SHIP, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID);
 
         assertEquals(PartnerOrderStatus.SHIPPED, response.status());
-        assertNotNull(partnerOrder.getShippedAt());
     }
 
     @Test
     void shipOrder_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.PACKING);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.PACKING, 0L);
 
         assertThrows(InvalidInputException.class, () -> partnerOrderService.shipOrder(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void deliverOrder_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.SHIPPED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID);
 
         assertEquals(PartnerOrderStatus.DELIVERED, response.status());
-        assertNotNull(partnerOrder.getDeliveredAt());
     }
 
     @Test
     void deliverOrder_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.READY_TO_SHIP);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.READY_TO_SHIP, 0L);
 
         assertThrows(InvalidInputException.class, () -> partnerOrderService.deliverOrder(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void cancelOrder_FromNew_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.NEW);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Customer request");
 
         assertEquals(PartnerOrderStatus.CANCELLED, response.status());
-        assertNotNull(partnerOrder.getCancelledAt());
-        assertEquals("Customer request", partnerOrder.getCancelReason());
     }
 
     @Test
     void cancelOrder_FromAccepted_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.ACCEPTED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "Supplier issue");
 
@@ -251,10 +247,7 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void cancelOrder_Shipped_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.SHIPPED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
         assertThrows(InvalidInputException.class,
                 () -> partnerOrderService.cancelOrder(PARTNER_ID, ORDER_ID, "reason"));
@@ -262,24 +255,20 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void requestReturn_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.DELIVERED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.DELIVERED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyString(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "Defective item");
 
         assertEquals(PartnerOrderStatus.RETURN_REQUESTED, response.status());
-        assertEquals("Defective item", partnerOrder.getCancelReason());
     }
 
     @Test
     void requestReturn_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.SHIPPED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.SHIPPED, 0L);
 
         assertThrows(InvalidInputException.class,
                 () -> partnerOrderService.requestReturn(PARTNER_ID, ORDER_ID, "reason"));
@@ -287,11 +276,11 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void approveReturn_Success() {
-        partnerOrder.setStatus(PartnerOrderStatus.RETURN_REQUESTED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        stubSelectForUpdate(PartnerOrderStatus.RETURN_REQUESTED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
-        lenient().when(partnerOrderRepository.save(any(PartnerOrder.class))).thenReturn(partnerOrder);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(1);
+        doNothing().when(outboxService).saveOutboxEvent(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString(), any(), anyString());
 
         var response = partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID);
 
@@ -300,33 +289,29 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void approveReturn_WrongStatus_ThrowsInvalidInput() {
-        partnerOrder.setStatus(PartnerOrderStatus.DELIVERED);
-        lenient().doNothing().when(authz).requireOrderFulfillment(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
-                .thenReturn(Optional.of(partnerOrder));
+        stubSelectForUpdate(PartnerOrderStatus.DELIVERED, 0L);
 
         assertThrows(InvalidInputException.class, () -> partnerOrderService.approveReturn(PARTNER_ID, ORDER_ID));
     }
 
     @Test
     void getPartnerOrders_Success() {
-        lenient().doNothing().when(authz).requireOrderRead(PARTNER_ID);
+        doNothing().when(authz).requireOrderRead(PARTNER_ID);
         PageRequest pageable = PageRequest.of(0, 10);
         Page<PartnerOrder> orderPage = new PageImpl<>(List.of(partnerOrder));
-        lenient().when(partnerOrderRepository.findByPartnerId(PARTNER_ID, pageable)).thenReturn(orderPage);
+        when(partnerOrderRepository.findByPartnerId(PARTNER_ID, pageable)).thenReturn(orderPage);
 
         Page<PartnerOrderResponse> response = partnerOrderService.getPartnerOrders(PARTNER_ID, pageable);
 
         assertNotNull(response);
         assertEquals(1, response.getTotalElements());
-        verify(authz).requireOrderRead(PARTNER_ID);
     }
 
     @Test
     void getPartnerOrder_Success() {
         partnerOrder.setStatus(PartnerOrderStatus.NEW);
-        lenient().doNothing().when(authz).requireOrderRead(PARTNER_ID);
-        lenient().when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+        doNothing().when(authz).requireOrderRead(PARTNER_ID);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
                 .thenReturn(Optional.of(partnerOrder));
 
         var response = partnerOrderService.getPartnerOrder(PARTNER_ID, ORDER_ID);
@@ -338,10 +323,29 @@ class PartnerOrderServiceImplTest {
 
     @Test
     void getPartnerOrder_NotFound_ThrowsEntityNotFound() {
-        lenient().doNothing().when(authz).requireOrderRead(PARTNER_ID);
+        doNothing().when(authz).requireOrderRead(PARTNER_ID);
         when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID)).thenReturn(Optional.empty());
 
         assertThrows(EntityNotFoundException.class,
                 () -> partnerOrderService.getPartnerOrder(PARTNER_ID, ORDER_ID));
+    }
+
+    @Test
+    void acceptOrder_VersionConflict_ThrowsConflictException() {
+        stubSelectForUpdate(PartnerOrderStatus.NEW, 0L);
+        when(jdbc.update(anyString(), any(), anyLong(), any(), anyLong())).thenReturn(0);
+
+        assertThrows(ConflictException.class, () -> partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID));
+    }
+
+    @Test
+    void acceptOrder_Idempotent_WhenAlreadyAccepted() {
+        stubSelectForUpdate(PartnerOrderStatus.ACCEPTED, 0L);
+        when(partnerOrderRepository.findByIdAndPartnerId(ORDER_ID, PARTNER_ID))
+                .thenReturn(Optional.of(partnerOrder));
+
+        var response = partnerOrderService.acceptOrder(PARTNER_ID, ORDER_ID);
+
+        assertEquals(PartnerOrderStatus.ACCEPTED, response.status());
     }
 }

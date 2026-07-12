@@ -81,4 +81,13 @@ public interface CartItemService {
      * @param cartItem is the cart item.
      */
     void save(final CartItem cartItem);
+
+    /**
+     * Adds an offer-based product to the user's cart.
+     *
+     * @param offerId  is the partner offer's id.
+     * @param quantity is the quantity to add.
+     * @return the created or updated <code>CartItem</code>
+     */
+    CartItem addOfferToCart(final Long offerId, final int quantity);
 }

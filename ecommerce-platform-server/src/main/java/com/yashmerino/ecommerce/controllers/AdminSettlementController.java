@@ -31,10 +31,10 @@ public class AdminSettlementController {
 
     @PostMapping("/calculate")
     public ResponseEntity<SettlementResponse> calculateSettlement(@RequestParam Long partnerId,
-                                                                    @RequestParam String periodStart,
-                                                                    @RequestParam String periodEnd,
-                                                                    @RequestParam(defaultValue = "USD") String currency) {
-        return ResponseEntity.ok(settlementService.calculateSettlement(
+                                                                     @RequestParam String periodStart,
+                                                                     @RequestParam String periodEnd,
+                                                                     @RequestParam(defaultValue = "USD") String currency) {
+        return ResponseEntity.ok(settlementService.adminCalculateSettlement(
                 partnerId, LocalDateTime.parse(periodStart), LocalDateTime.parse(periodEnd), currency));
     }
 

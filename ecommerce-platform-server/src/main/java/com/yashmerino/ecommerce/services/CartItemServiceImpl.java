@@ -24,9 +24,15 @@ package com.yashmerino.ecommerce.services;
  + SOFTWARE.
  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 
+import com.yashmerino.ecommerce.model.Cart;
 import com.yashmerino.ecommerce.model.CartItem;
 import com.yashmerino.ecommerce.model.Product;
+import com.yashmerino.ecommerce.model.User;
+import com.yashmerino.ecommerce.model.offer.PartnerOffer;
+import com.yashmerino.ecommerce.model.offer.PartnerOfferStatus;
 import com.yashmerino.ecommerce.repositories.CartItemRepository;
+import com.yashmerino.ecommerce.repositories.CartRepository;
+import com.yashmerino.ecommerce.repositories.PartnerOfferRepository;
 import com.yashmerino.ecommerce.repositories.UserRepository;
 import com.yashmerino.ecommerce.services.interfaces.CartItemService;
 import jakarta.persistence.EntityNotFoundException;
@@ -51,6 +57,21 @@ public class CartItemServiceImpl implements CartItemService {
     private final CartItemRepository cartItemRepository;
 
     /**
+     * Partner Offer repository.
+     */
+    private final PartnerOfferRepository partnerOfferRepository;
+
+    /**
+     * User repository.
+     */
+    private final UserRepository userRepository;
+
+    /**
+     * Cart repository.
+     */
+    private final CartRepository cartRepository;
+
+    /**
      * Access denied message translation key.
      */
     private static final String ACCESS_DENIED_MESSAGE = "access_denied";
@@ -63,10 +84,17 @@ public class CartItemServiceImpl implements CartItemService {
     /**
      * Constructor to inject dependencies.
      *
-     * @param cartItemRepository is the cart item repository.
+     * @param cartItemRepository     is the cart item repository.
+     * @param partnerOfferRepository is the partner offer repository.
+     * @param userRepository         is the user repository.
+     * @param cartRepository         is the cart repository.
      */
-    public CartItemServiceImpl(CartItemRepository cartItemRepository) {
+    public CartItemServiceImpl(CartItemRepository cartItemRepository, PartnerOfferRepository partnerOfferRepository,
+                               UserRepository userRepository, CartRepository cartRepository) {
         this.cartItemRepository = cartItemRepository;
+        this.partnerOfferRepository = partnerOfferRepository;
+        this.userRepository = userRepository;
+        this.cartRepository = cartRepository;
     }
 
     /**
@@ -196,5 +224,65 @@ public class CartItemServiceImpl implements CartItemService {
     @Override
     public void save(final CartItem cartItem) {
         cartItemRepository.save(cartItem);
+    }
+
+    /**
+     * Adds an offer-based product to the user's cart.
+     *
+     * @param offerId  is the partner offer's id.
+     * @param quantity is the quantity to add.
+     * @return the created or updated <code>CartItem</code>
+     */
+    @Override
+    public CartItem addOfferToCart(final Long offerId, final int quantity) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String username = auth.getName();
+
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new EntityNotFoundException("User not found"));
+
+        PartnerOffer offer = partnerOfferRepository.findById(offerId)
+                .orElseThrow(() -> new EntityNotFoundException("Offer not found"));
+
+        if (offer.getStatus() != PartnerOfferStatus.APPROVED) {
+            throw new IllegalArgumentException("Offer is not approved");
+        }
+
+        Product product = offer.getProduct();
+        if (!product.getActive()) {
+            throw new IllegalArgumentException("Product is not active");
+        }
+
+        int availableStock = offer.getOnHandQuantity() - offer.getReservedQuantity();
+        if (availableStock < quantity) {
+            throw new IllegalArgumentException("Insufficient stock");
+        }
+
+        Cart cart = user.getCart();
+        if (cart == null) {
+            cart = new Cart();
+            cart = cartRepository.save(cart);
+            user.setCart(cart);
+            userRepository.save(user);
+        }
+
+        Optional<CartItem> existingItem = cartItemRepository
+                .findByCartIdAndProductIdAndOfferId(cart.getId(), product.getId(), offerId);
+        if (existingItem.isPresent()) {
+            CartItem item = existingItem.get();
+            item.setQuantity(item.getQuantity() + quantity);
+            return cartItemRepository.save(item);
+        }
+
+        CartItem cartItem = new CartItem();
+        cartItem.setCart(cart);
+        cartItem.setProduct(product);
+        cartItem.setOfferId(offerId);
+        cartItem.setPartnerId(offer.getPartner().getId());
+        cartItem.setName(product.getName());
+        cartItem.setPrice(offer.getPrice());
+        cartItem.setQuantity(quantity);
+
+        return cartItemRepository.save(cartItem);
     }
 }

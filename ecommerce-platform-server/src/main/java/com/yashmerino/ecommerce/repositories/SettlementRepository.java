@@ -8,6 +8,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
 
+import java.time.LocalDateTime;
+
 public interface SettlementRepository extends JpaRepository<Settlement, Long> {
 
     Page<Settlement> findByPartnerId(Long partnerId, Pageable pageable);
@@ -15,4 +17,7 @@ public interface SettlementRepository extends JpaRepository<Settlement, Long> {
     Optional<Settlement> findByIdAndPartnerId(Long id, Long partnerId);
 
     Page<Settlement> findByStatus(SettlementStatus status, Pageable pageable);
+
+    Optional<Settlement> findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
+            Long partnerId, LocalDateTime periodStart, LocalDateTime periodEnd, String currency);
 }

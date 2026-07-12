@@ -29,10 +29,21 @@ public class CheckoutExpiryJob {
         int paymentChanged = jdbc.update("UPDATE payments p JOIN orders o ON o.id=p.order_id SET p.status='EXPIRED',p.version=p.version+1 " +
                 "WHERE p.order_id=? AND p.status='AWAITING_PAYMENT_METHOD' AND o.status='CREATED'", orderId);
         if (paymentChanged != 1) return;
-        jdbc.query("SELECT product_id,quantity FROM inventory_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE",
+        jdbc.query("SELECT product_id,offer_id,quantity,inventory_source_type FROM inventory_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE",
                 rs -> {
-                    while (rs.next()) jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",
-                            rs.getInt(2), rs.getLong(1), rs.getInt(2));
+                    while (rs.next()) {
+                        String sourceType = rs.getString("inventory_source_type");
+                        int qty = rs.getInt("quantity");
+                        if ("OFFER".equals(sourceType)) {
+                            long offerId = rs.getLong("offer_id");
+                            jdbc.update("UPDATE partner_offers SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",
+                                    qty, offerId, qty);
+                        } else {
+                            long productId = rs.getLong("product_id");
+                            jdbc.update("UPDATE products SET reserved_quantity=reserved_quantity-?,version=version+1 WHERE id=? AND reserved_quantity>=?",
+                                    qty, productId, qty);
+                        }
+                    }
                     return null;
                 }, orderId);
         jdbc.update("UPDATE inventory_reservations SET status='EXPIRED',version=version+1,updated_at=CURRENT_TIMESTAMP(6) WHERE order_id=? AND status='RESERVED'", orderId);

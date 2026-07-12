@@ -10,6 +10,9 @@ public interface SettlementService {
     SettlementResponse calculateSettlement(Long partnerId, java.time.LocalDateTime periodStart,
                                            java.time.LocalDateTime periodEnd, String currency);
 
+    SettlementResponse adminCalculateSettlement(Long partnerId, java.time.LocalDateTime periodStart,
+                                                java.time.LocalDateTime periodEnd, String currency);
+
     Page<SettlementResponse> getSettlements(Long partnerId, Pageable pageable);
 
     SettlementResponse getSettlement(Long partnerId, Long settlementId);
@@ -17,6 +20,10 @@ public interface SettlementService {
     SettlementResponse getSettlementById(Long settlementId);
 
     Page<SettlementResponse> getAllSettlements(Pageable pageable);
+
+    Page<SettlementResponse> adminGetSettlements(Long partnerId, Pageable pageable);
+
+    SettlementResponse adminGetSettlement(Long partnerId, Long settlementId);
 
     SettlementResponse approveSettlement(Long settlementId);
 

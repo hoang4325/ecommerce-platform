@@ -5,6 +5,9 @@ import com.yashmerino.ecommerce.model.order.PartnerOrderStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,4 +23,15 @@ public interface PartnerOrderRepository extends JpaRepository<PartnerOrder, Long
 
     List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtBetween(
             Long partnerId, PartnerOrderStatus status, LocalDateTime start, LocalDateTime end);
+
+    @Query("SELECT po FROM PartnerOrder po WHERE po.partner.id = :partnerId AND po.status = :status AND po.deliveredAt >= :periodStart AND po.deliveredAt < :periodEnd")
+    List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtInRange(
+            @Param("partnerId") Long partnerId,
+            @Param("status") PartnerOrderStatus status,
+            @Param("periodStart") LocalDateTime periodStart,
+            @Param("periodEnd") LocalDateTime periodEnd);
+
+    @Modifying
+    @Query("UPDATE PartnerOrder po SET po.settlementStatus = 'SETTLED', po.settlementId = :settlementId WHERE po.id IN :orderIds")
+    int markAsSettled(@Param("settlementId") Long settlementId, @Param("orderIds") List<Long> orderIds);
 }

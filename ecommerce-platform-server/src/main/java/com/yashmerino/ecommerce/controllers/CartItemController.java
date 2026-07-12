@@ -40,7 +40,9 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -200,5 +202,37 @@ public class CartItemController {
         paginated.setTotalPrice(totalPrice);
 
         return paginated;
+    }
+
+    /**
+     * Request body for adding an offer to cart.
+     */
+    public record CartItemRequest(
+            @NotNull(message = "offer_id_required") Long offerId,
+            @Min(value = 1, message = "quantity_value_error") int quantity
+    ) {}
+
+    /**
+     * Adds an offer-based item to the cart.
+     *
+     * @param request is the request body containing offerId and quantity.
+     * @return the created <code>CartItemDTO</code> with 201 status.
+     */
+    @Operation(summary = "Adds an offer-based item to the cart.")
+    @ApiResponses(value = {
+            @ApiResponse(responseCode = "201", description = "Item added to cart",
+                    content = {@Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
+                            schema = @Schema(implementation = CartItemDTO.class))}),
+            @ApiResponse(responseCode = "400", description = "Invalid request",
+                    content = @Content),
+            @ApiResponse(responseCode = "401", description = "Unauthorized",
+                    content = @Content),
+            @ApiResponse(responseCode = "404", description = "Offer not found",
+                    content = @Content)})
+    @PostMapping
+    public ResponseEntity<CartItemDTO> addOfferToCart(@Valid @RequestBody CartItemRequest request) {
+        CartItem cartItem = cartItemService.addOfferToCart(request.offerId(), request.quantity());
+        CartItemDTO cartItemDTO = RequestBodyToEntityConverter.convertToCartItemDTO(cartItem);
+        return new ResponseEntity<>(cartItemDTO, HttpStatus.CREATED);
     }
 }
