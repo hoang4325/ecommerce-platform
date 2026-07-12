@@ -2,6 +2,7 @@ package com.yashmerino.ecommerce.kafka;
 
 import com.yashmerino.ecommerce.kafka.events.RefundResultEventV2;
 import com.yashmerino.ecommerce.model.Payment;
+import com.yashmerino.ecommerce.model.Order;
 import com.yashmerino.ecommerce.model.domain.Refund;
 import com.yashmerino.ecommerce.repositories.OrderRepository;
 import com.yashmerino.ecommerce.repositories.PaymentRepository;
@@ -47,6 +48,8 @@ public class RefundResultV2Consumer {
 
         Payment payment = paymentRepository.findById(refund.getPaymentId())
             .orElseThrow(() -> new EntityNotFoundException("payment_not_found"));
+        Order order = orderRepository.findById(refund.getOrderId())
+            .orElseThrow(() -> new EntityNotFoundException("order_not_found"));
         boolean mismatch = !refund.getOrderId().equals(event.orderId()) || !refund.getPaymentId().equals(event.paymentId())
             || refund.getAmount().compareTo(new BigDecimal(event.amount())) != 0 || !refund.getCurrency().equals(event.currency())
             || payment.getExternalPaymentId() == null || !payment.getExternalPaymentId().equals(event.externalPaymentId());
@@ -62,7 +65,7 @@ public class RefundResultV2Consumer {
             refundRepository.save(refund);
 
             int orderUpdated = orderRepository.updateOrderStatusAndVersion(
-                refund.getOrderId(), OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, refund.getVersion());
+                refund.getOrderId(), OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, order.getVersion());
             if (orderUpdated == 0) throw new OptimisticLockException("Order version conflict");
 
             int paymentUpdated = paymentRepository.updateStatusAndVersion(
@@ -75,7 +78,7 @@ public class RefundResultV2Consumer {
             refundRepository.save(refund);
 
             int orderUpdated = orderRepository.updateOrderStatusAndVersion(
-                refund.getOrderId(), OrderStatus.REFUND_PENDING, OrderStatus.REFUND_FAILED, refund.getVersion());
+                refund.getOrderId(), OrderStatus.REFUND_PENDING, OrderStatus.REFUND_FAILED, order.getVersion());
             if (orderUpdated == 0) throw new OptimisticLockException("Order version conflict");
             int paymentUpdated = paymentRepository.updateStatusAndVersion(
                 refund.getPaymentId(), PaymentStatus.REFUND_PENDING, PaymentStatus.REFUND_FAILED, payment.getVersion());

@@ -112,6 +112,23 @@ public class SecurityConfig {
     private static final String CARTS_ALL_ENDPOINTS = "/api/cart/**";
 
     /**
+     * Regex for partner endpoints.
+     */
+    private static final String PARTNER_ALL_ENDPOINTS = "/api/partners/**";
+
+    /**
+     * Regex for admin partner endpoints.
+     */
+    private static final String ADMIN_PARTNER_ENDPOINTS = "/api/admin/partners/**";
+
+    private static final String PARTNER_OFFER_ENDPOINTS = "/api/partner/offers/**";
+    private static final String PARTNER_ORDER_ENDPOINTS = "/api/partner/orders/**";
+    private static final String PARTNER_SETTLEMENT_ENDPOINTS = "/api/partner/settlements/**";
+
+    private static final String ADMIN_OFFER_ENDPOINTS = "/api/admin/offers/**";
+    private static final String ADMIN_SETTLEMENT_ENDPOINTS = "/api/admin/settlements/**";
+
+    /**
      * Jwt Auth Entry Point to handle exceptions.
      */
     private final JwtAuthEntryPoint jwtAuthEntryPoint;
@@ -175,6 +192,14 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, PRODUCTS_ALL_ENDPOINTS).hasAuthority(Role.SELLER.name())
                         .requestMatchers(HttpMethod.PUT, PRODUCTS_ALL_ENDPOINTS).hasAuthority(Role.SELLER.name())
                         .requestMatchers(HttpMethod.DELETE, PRODUCTS_ALL_ENDPOINTS).hasAuthority(Role.SELLER.name())
+                        .requestMatchers(HttpMethod.POST, "/api/partners/applications").authenticated()
+                        .requestMatchers(PARTNER_ALL_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
+                        .requestMatchers(PARTNER_OFFER_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
+                        .requestMatchers(PARTNER_ORDER_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
+                        .requestMatchers(PARTNER_SETTLEMENT_ENDPOINTS).hasAnyAuthority(Role.PARTNER.name(), Role.ADMIN.name())
+                        .requestMatchers(ADMIN_PARTNER_ENDPOINTS).hasAuthority(Role.ADMIN.name())
+                        .requestMatchers(ADMIN_OFFER_ENDPOINTS).hasAuthority(Role.ADMIN.name())
+                        .requestMatchers(ADMIN_SETTLEMENT_ENDPOINTS).hasAuthority(Role.ADMIN.name())
                         .requestMatchers(SWAGGER_WHITELIST).permitAll()
                         .requestMatchers(ACTUATOR_WHITELIST).permitAll()
                         .anyRequest()

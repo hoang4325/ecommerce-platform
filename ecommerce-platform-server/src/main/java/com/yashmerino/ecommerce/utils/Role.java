@@ -41,5 +41,10 @@ public enum Role {
     /**
      * Admin.
      */
-    ADMIN
+    ADMIN,
+
+    /**
+     * Partner (user with at least one active partner membership).
+     */
+    PARTNER
 }

@@ -166,15 +166,15 @@ public class NotificationServiceImpl implements NotificationService {
             notification.setStatus(NotificationStatus.SENT);
             notification.setSentAt(LocalDateTime.now());
             notificationRepository.save(notification);
+
+            inboxService.markProcessed("notification-service", event.eventId(),
+                "NotificationRequestedEventV2", event.correlationId(), event.aggregateId());
         } catch (Exception e) {
             log.error("Failed to send notification: {}", e.getMessage(), e);
             notification.setStatus(NotificationStatus.FAILED);
             notification.setLastError(e.getMessage());
             notificationRepository.save(notification);
         }
-
-        inboxService.markProcessed("notification-service", event.eventId(),
-            "NotificationRequestedEventV2", event.correlationId(), event.aggregateId());
     }
 
     private String convertPayloadToString(Map<String, Object> payload) {

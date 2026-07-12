@@ -19,6 +19,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Order controller.
@@ -57,14 +58,7 @@ public class OrderController {
                     content = @Content)})
     @PostMapping
     public ResponseEntity<SuccessWithIdDTO> placeOrder(@Validated @RequestBody OrderDTO orderDTO) {
-        Long id = this.orderService.placeOrder(orderDTO);
-
-        SuccessWithIdDTO successWithIdDTO = new SuccessWithIdDTO();
-        successWithIdDTO.setStatus(200);
-        successWithIdDTO.setMessage("order_placed_successfully");
-        successWithIdDTO.setId(id);
-
-        return new ResponseEntity<>(successWithIdDTO, HttpStatus.OK);
+        throw new ResponseStatusException(HttpStatus.GONE, "legacy_order_endpoint_disabled_use_checkout");
     }
 
     /**

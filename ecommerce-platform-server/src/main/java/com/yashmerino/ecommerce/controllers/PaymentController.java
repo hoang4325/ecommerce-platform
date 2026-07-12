@@ -17,6 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Payments controller.
@@ -55,12 +56,6 @@ public class PaymentController {
                     content = @Content)})
     @PostMapping("/{orderId}")
     public ResponseEntity<SuccessDTO> pay(@PathVariable Long orderId, @Validated @RequestBody PaymentDTO paymentDTO) {
-        this.paymentService.pay(orderId, paymentDTO);
-
-        SuccessDTO successDTO = new SuccessDTO();
-        successDTO.setStatus(200);
-        successDTO.setMessage("payment_sent_successfully");
-
-        return new ResponseEntity<>(successDTO, HttpStatus.OK);
+        throw new ResponseStatusException(HttpStatus.GONE, "legacy_payment_endpoint_disabled_use_payment_initiation");
     }
 }

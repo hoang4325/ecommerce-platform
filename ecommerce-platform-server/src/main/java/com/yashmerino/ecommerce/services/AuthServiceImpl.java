@@ -25,6 +25,7 @@ package com.yashmerino.ecommerce.services;
 
 import com.yashmerino.ecommerce.exceptions.UserDoesntExistException;
 import com.yashmerino.ecommerce.exceptions.UsernameAlreadyTakenException;
+import com.yashmerino.ecommerce.exceptions.InvalidInputException;
 import com.yashmerino.ecommerce.kafka.NotificationEventProducer;
 import com.yashmerino.ecommerce.model.Cart;
 import com.yashmerino.ecommerce.model.RefreshToken;
@@ -109,6 +110,10 @@ public class AuthServiceImpl implements AuthService {
      */
     @Override
     public void register(RegisterDTO registerDTO) {
+        if (registerDTO.getRole() != com.yashmerino.ecommerce.utils.Role.USER) {
+            throw new InvalidInputException("public_registration_role_not_allowed");
+        }
+
         if (userRepository.existsByUsername(registerDTO.getUsername())) { // NOSONAR - The user repository cannot be null.
             throw new UsernameAlreadyTakenException("username_taken");
         }
@@ -118,7 +123,7 @@ public class AuthServiceImpl implements AuthService {
         user.setEmail(registerDTO.getEmail());
         user.setPassword(passwordEncoder.encode(registerDTO.getPassword()));
 
-        Optional<Role> roleOptional = roleRepository.findByName(registerDTO.getRole().name());
+        Optional<Role> roleOptional = roleRepository.findByName(com.yashmerino.ecommerce.utils.Role.USER.name());
 
         if (roleOptional.isPresent()) {
             Role role = roleOptional.get();

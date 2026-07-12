@@ -56,6 +56,7 @@ public class EmailNotificationSender implements NotificationSender {
             log.info("Email to {} was successfully sent.", contact);
         } catch (Exception e) {
             log.error("Email to {} couldn't be sent.", contact, e);
+            throw new IllegalStateException("email_delivery_failed", e);
         }
     }
 }

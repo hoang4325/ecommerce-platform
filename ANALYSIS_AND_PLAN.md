@@ -1,546 +1,950 @@
-# Smart Cart — Phân tích và kế hoạch triển khai
+# Partner Product Management — Phân tích và kế hoạch phát triển hệ thống quản lý đối tác sản phẩm
 
-> **Status: READY_FOR_OWNER_DECISIONS**
+> **Trạng thái:** `READY_FOR_OWNER_DECISIONS`
 >
-> Chỉ là thiết kế; chưa implementation, chưa tạo source code hoặc migration.
-> Repository được đối chiếu ngày 2026-07-11. Base package thực tế: `com.yashmerino.ecommerce`.
+> Tài liệu phân tích và kế hoạch; chưa triển khai source, chưa tạo migration, chưa thay đổi API.
+> Repository được đối chiếu trực tiếp tại commit `43b2f0d` ngày 2026-07-12. Base package thực tế là `com.yashmerino.ecommerce`.
 
-## 1. Scope MVP và deferred
+## 1. Executive summary
 
-MVP gồm authoritative pricing, checkout idempotency, order snapshot, reservation tồn kho/promotion/điểm, payment initiation riêng, Stripe server-confirm flow hiện có được làm bền vững, outbox/inbox theo từng service, full refund, loyalty/spend ledger và Notification Inbox/send operation.
+Repository hiện là nền tảng thương mại điện tử ba backend module và một React UI. Commit mới nhất đã bổ sung checkout có idempotency, order-item snapshot bằng SQL, reservation tồn kho/khuyến mại/điểm, payment/refund V2 qua outbox/inbox và loyalty/spend ledger. Các phần này có source và Flyway migration thật, nhưng vẫn đang ở trạng thái chuyển tiếp: V1 và V2 chạy song song, một số thiết kế cũ vẫn tồn tại, Notification V2 chưa phải durable worker, và test suite hiện không xanh.
 
-Deferred: partial refund, customer cancel sau payment initiation, Stripe client-secret/`confirmCardPayment`/webhook/SCA, nested promotion groups, multi-currency conversion, return-merchandise workflow đầy đủ và exactly-once delivery.
+Miền partner chưa tồn tại. Không có entity, migration, repository, service, controller hay frontend cho `Partner`, `PartnerMember`, `PartnerOffer`, `PartnerOrder`, commission hoặc settlement. Seller hiện chỉ là `User` có system role `SELLER`; `Product.user_id` là ownership duy nhất. Mô hình đó không hỗ trợ tổ chức nhiều thành viên, phê duyệt đối tác, tenant scope, kiểm duyệt offer, chia đơn, hoa hồng hoặc đối soát.
 
-Nguyên tắc:
+Đề xuất kiến trúc cho MVP là **Phương án B — catalog Product dùng chung + PartnerOffer**, nhưng migration ban đầu giữ quan hệ 1:1 giữa legacy product và offer để giảm rủi ro. Không hợp nhất các legacy product giống nhau trong migration; việc deduplicate chỉ thực hiện sau bằng quy trình review. Mô hình B tốn thêm một lần join và thay đổi checkout/inventory lớn hơn Phương án A, đổi lại tránh phải viết lại order snapshot, cart, promotion và inventory khi hệ thống mở rộng thành marketplace nhiều nguồn cung.
 
-- Main Server sở hữu cart/order/pricing/inventory/promotion/loyalty/refund business state. Payment Service sở hữu Stripe operations. Notification Service sở hữu send operations. Không service nào đọc database service khác.
-- Service phát critical Kafka event cần local outbox. Service nhận critical event cần local inbox/processed marker. Service không phát event không bắt buộc có outbox.
-- DB + Kafka/Stripe/SMTP không tạo exactly-once. Cam kết là at-least-once với idempotency và reconciliation; SMTP timeout có thể không xác định được email đã gửi hay chưa.
-- Controller không nhận hoặc tự đặt authoritative price/total/status.
+MVP đề xuất gồm Partner foundation, membership/tenant authorization, offer moderation, inventory theo offer, split order thành `PartnerOrder`, commission snapshot, settlement tính toán–review–approve–mark-paid thủ công, audit và notification. AI chỉ hỗ trợ, chạy bất đồng bộ, không nằm trong critical transaction và có thể deferred khỏi MVP.
 
-## 2. Kiến trúc hiện tại đã xác minh
+Trước khi bắt đầu Phase 1 phải xử lý các lỗi P0/P1: client có thể tự đăng ký system role `ADMIN`; seller có thể xóa sản phẩm của seller khác; payment V1 thiếu ownership; order V1 nhận total/status từ client; `User.products mappedBy` sai; V1/V2 chưa cutover; refund consumer dùng sai version; Notification có thể đánh dấu `SENT` dù SMTP lỗi; và test baseline đang fail.
 
-| Module | Dữ kiện từ source hiện tại |
+## 2. Phạm vi và cách phân loại hiện trạng
+
+Tài liệu dùng bốn nhãn:
+
+| Nhãn | Ý nghĩa |
 |---|---|
-| `ecommerce-platform-server` | MySQL `ecommerce_platform`; `POST /api/order` nhận `OrderDTO.totalAmount/status`; `POST /api/payment/{orderId}` nhận `PaymentDTO`; gửi trực tiếp `payment.requested`, nhận `payment.result` |
-| `ecommerce-platform-payment-service` | MySQL riêng; nhận request; `StripePaymentServiceImpl` gọi `PaymentIntent.create(confirm=true)`, amount × 100, currency hardcode `EUR`; gửi result trực tiếp |
-| `ecommerce-platform-notification-service` | MySQL riêng; V1 chỉ có `notifications`; listener `notification.requested` catch-and-swallow; service gửi SMTP trong transaction/retry, chưa có inbox/business key |
-| `ecommerce-platform-ui` | Stripe Elements gọi `createPaymentMethod`; gửi `paymentMethod.id` trong field cũ tên `stripeToken`; không gọi `confirmCardPayment` |
+| **IMPLEMENTED** | Có source thực thi và migration/config tương ứng trong repository hiện tại. |
+| **PARTIAL** | Có source thật nhưng thiếu một phần luồng, còn V1/V2 song song, thiếu UI/operational behavior hoặc có defect ảnh hưởng cam kết. |
+| **DESIGN-ONLY** | Chỉ xuất hiện trong `ANALYSIS_AND_PLAN.md` cũ hoặc `docs/superpowers/plans/...`, không có implementation đầy đủ. |
+| **MISSING** | Không tìm thấy source hoặc migration tương ứng. |
 
-Class/package thực tế:
+Không dùng README làm bằng chứng chức năng. Các kết luận dưới đây được đối chiếu từ entity, DTO, repository, service, controller, security config, migrations, Payment Service, Notification Service, React UI, tests và commit mới nhất.
 
-- Main: `model.Product`, `CartItem`, `Order`, `Payment`; `services.OrderServiceImpl`, `PaymentServiceImpl`; `controllers.OrderController`, `PaymentController`; `kafka.PaymentEventProducer`, `PaymentEventListener`; `kafka.events.PaymentRequestedEvent`, `PaymentResultEvent`.
-- Payment: `model.Payment`; `service.impl.PaymentServiceImpl`, `StripePaymentServiceImpl`; `kafka.PaymentEventListener`, `PaymentResultProducer`; event records tương ứng.
-- Notification: `model.Notification`; `service.impl.NotificationServiceImpl`, `EmailNotificationSender`; `kafka.NotificationEventListener`; `kafka.events.NotificationRequestedEvent`.
-- Main status: order `CREATED, PAYMENT_PENDING, PAID, PAYMENT_FAILED`; payment `PENDING, SUCCEEDED, FAILED`. Payment Service status `SUCCEEDED, FAILED`. Notification status `PENDING, SENT, FAILED`.
-- Main migrations V1–V3; Payment và Notification mỗi module chỉ có V1. Main product/cart item price là `DOUBLE`; order/payment money là `DECIMAL(19,2)`.
+## 3. Kiến trúc repository đã xác minh
 
-Không có checkout endpoint/idempotency, reservations, promotion/loyalty, outbox/inbox, webhook hoặc refund implementation.
+| Module | Hiện trạng xác minh |
+|---|---|
+| `ecommerce-platform-server` | Main business service, MySQL `ecommerce_platform`, Spring Security/JWT, cart/product/order, checkout, inventory/promotion/loyalty reservation, main payment/refund state, outbox/inbox và Kafka V1/V2. |
+| `ecommerce-platform-payment-service` | MySQL riêng; listener V1 gọi Stripe trực tiếp; V2 nhận inbox, lưu operation, worker gọi Stripe với idempotency key và phát result/review qua outbox. |
+| `ecommerce-platform-notification-service` | MySQL riêng; V1 và V2 listeners. V2 có processed-events/business key nhưng vẫn gửi SMTP trong listener transaction, chưa có durable send worker. |
+| `ecommerce-platform-ui` | React/Vite; customer catalog/cart/order và seller product CRUD. Cart đã gọi checkout/initiation V2. Chưa có partner, moderation, commission, settlement, refund hoặc loyalty UI. |
+| `ecommerce-platform-it` | Selenium tests cho user/seller/cart/product; chưa có partner/multi-partner flow. |
 
-## 3. Kiến trúc mục tiêu và API
+Flyway hiện có Main V1–V6, Payment V1–V2, Notification V1–V2. Không được sửa các migration này; mọi thay đổi partner phải additive bằng version mới.
 
-### 3.1 Checkout — chưa phát payment event
+## 4. Hiện trạng seller đã xác minh
+
+### 4.1 Mô hình dữ liệu và ownership
+
+- `model.Product.user` là `@ManyToOne` với `@JoinColumn(name = "user_id")` (`Product.java:97-102`). Đây là nguồn ownership thực tế.
+- `model.User.products` khai báo `@OneToMany(mappedBy = "id", cascade = ALL)` (`User.java:54-59`). Giá trị đúng phải là `mappedBy = "user"`. `mappedBy = "id"` trỏ vào primary key của `Product`, không trỏ vào association owner và có thể làm Hibernate metadata/context khởi động lỗi khi collection được validate.
+- Migration V1 tạo `products.user_id` nullable, có FK tới `users.id`, nhưng không có constraint bắt buộc seller. Vì vậy dữ liệu product không seller là trạng thái hợp lệ ở DB hiện tại và phải được xử lý khi backfill.
+- Không có seller profile, seller status, organization, membership hoặc tenant ID. Username chỉ là identity hiển thị/lookup, không phải tenant boundary phù hợp.
+
+### 4.2 Role `SELLER` và API hiện tại
+
+`SecurityConfig` cho phép:
+
+- GET `/api/product/**`: public, bao gồm catalog, ảnh và `/seller/{username}`.
+- POST/PUT/DELETE `/api/product/**`: chỉ cần authority `SELLER`.
+- Không có method-level policy kiểm tra partner/member role; ownership nằm rải rác trong service.
+
+Luồng cụ thể:
+
+| Hành động | Source/method | Hiện trạng |
+|---|---|---|
+| Tạo product | `ProductServiceImpl.addProduct` | Lấy current principal theo username, gán `product.user`; ownership có gán. Không có moderation/status partner; DTO cho client gửi trực tiếp category entities. |
+| Lấy theo seller | `ProductController.getSellerProducts` → `ProductServiceImpl.getSellerProducts` → `ProductRepository.getProductsBySellerId` | Path dùng username rồi đổi sang user ID; public read. Không kiểm tra người gọi là seller đó, phù hợp nếu đây là public storefront nhưng không được tái sử dụng làm API quản trị. |
+| Sửa product | `ProductServiceImpl.updateProduct` | So sánh current username với `product.user.username`; có ownership nhưng scope dựa trên mutable business identifier. Client được gửi name/categories/price/description trực tiếp; không có allowlist theo moderation state. |
+| Cập nhật ảnh | `ProductServiceImpl.updatePhoto` | Có cùng ownership check bằng username. File lưu BLOB trong DB; không thấy kiểm MIME, kích thước hay malware scan. |
+| Xóa product | `ProductServiceImpl.delete` | Chỉ `findById` rồi `delete`; **không kiểm tra ownership**. Bất kỳ user role `SELLER` nào biết product ID đều có thể xóa product seller khác. |
+| Hiển thị catalog/search | `getAllProducts`, `search` | Trả mọi product; không filter `active`, seller status hoặc moderation status. |
+| Thêm giỏ | `addProductToCart` | Không kiểm `active`, stock hay seller/partner status ở lúc add; checkout mới kiểm lại active/stock. |
+
+### 4.3 Lỗi và hướng sửa bắt buộc
+
+1. **P0 — IDOR khi xóa:** `ProductServiceImpl.delete(Long)` phải query resource theo `(productId, currentPartnerId)` hoặc policy service kiểm `PartnerMember` + resource partner; admin có endpoint riêng. Không chỉ thêm một username comparison tạm thời rồi giữ mô hình cũ.
+2. **P0 — self-register ADMIN:** `RegisterDTO.role` nhận enum gồm `ADMIN`, `AuthServiceImpl.register` lookup và gán đúng role client gửi, còn POST `/api/auth/**` là public. Public registration chỉ được tạo `USER`; partner access đến từ approved `PartnerMember`, system `ADMIN` chỉ qua trusted admin workflow.
+3. **P1 — JPA mapping:** sửa `User.products mappedBy = "user"`. Sau cutover PartnerOffer, collection legacy nên deprecated rồi xóa ở phase cleanup.
+4. **P1 — nullable owner:** backfill/quarantine product có `user_id IS NULL`; target offer phải có `partner_id NOT NULL`.
+5. **P1 — username scope:** current user phải resolve thành immutable `userId`, rồi membership `(user_id, partner_id, status)`; không nhận username từ client để scope command.
+6. **P1 — mass assignment:** command DTO tách riêng create/update/submit/admin-decision. Không nhận `status`, `partnerId`, `approvedBy`, commission, payable, stock counters hoặc entity `Category` từ client; nhận category IDs và validate server-side.
+7. **P1 — file upload:** chuyển tài liệu/ảnh sang object storage metadata, enforce MIME/size/checksum/scan và signed URL; DB không giữ hồ sơ pháp lý lớn.
+
+## 5. Nền tảng giao dịch hiện tại
+
+### 5.1 Ma trận implemented/partial/design-only/missing
+
+| Miền | Trạng thái | Bằng chứng và giới hạn |
+|---|---|---|
+| Checkout V2 | **IMPLEMENTED/PARTIAL** | `CheckoutController` và `CheckoutService.checkout`; idempotency row+hash, cart/product locks, server pricing, order/payment creation. UI gọi endpoint. Chưa có partner/offer, shipping, rich promotion hoặc multi-partner split. |
+| Order snapshot | **PARTIAL** | Migration V4 có `order_items`; checkout insert qua `JdbcTemplate`. Không có Java `OrderItem` entity/repository; snapshot hiện chỉ product/name/price/quantity/discount fields, chưa có partner/offer/commission/payable. |
+| Inventory reservation | **IMPLEMENTED/PARTIAL** | Product có on-hand/reserved/version; V4 có `inventory_reservations`; checkout reserve, success commit, fail/cancel/expiry release. Inventory vẫn ở Product, chưa theo PartnerOffer/kho; không có adjustment API. |
+| Payment initiation V2 | **IMPLEMENTED/PARTIAL** | Ownership, state, expiry, request idempotency, Main outbox. Payment Service có inbox/operation/worker/Stripe idempotency/outbox. V1 endpoint/listener vẫn tồn tại. |
+| Refund V2 | **IMPLEMENTED/PARTIAL** | Full refund request, ownership, Main outbox, Payment operation/Stripe refund, result inbox, spend/loyalty reversal. Không partial refund, return workflow hay settlement adjustment; UNKNOWN chưa có explicit reconciliation workflow. |
+| Loyalty | **IMPLEMENTED/PARTIAL** | V4/V6 tables; reserve/release/consume/earn/debt/reversal bằng JDBC. UI luôn gửi `requestedPoints: 0`; không có loyalty API/dashboard. Một số edge semantics chỉ được thể hiện trong service, chưa thành domain model. |
+| Promotion | **PARTIAL** | Có fixed `discount_amount` coupon, validity/usage reservation/counter. Không có product/category/partner funding, stacking/rule groups hay discount allocation hoàn chỉnh vào từng line. |
+| Main outbox/inbox | **IMPLEMENTED/PARTIAL** | Outbox publisher claim/retry/dead-letter và processed event marker cho V2 result. V1 producer/consumer vẫn gửi trực tiếp và catch/swallow. |
+| Payment outbox/inbox | **IMPLEMENTED/PARTIAL** | V2 durable operation/outbox/inbox. Repository claim đưa `UNKNOWN` trở lại worker sau lease; chưa có Stripe query/reconciliation job rõ ràng. V1 direct Stripe path vẫn hoạt động. |
+| Notification inbox | **PARTIAL** | V2 processed-events và business key có migration/source. Gửi SMTP vẫn ở listener transaction; chưa có claim/retry worker và SMTP ambiguity handling. |
+| Event V2 | **IMPLEMENTED/PARTIAL** | Payment/refund/review records có envelope gần đủ và V2 topics. Naming `eventType` chưa thống nhất giữa Main và Payment; notification V2 chưa được Main phát từ flow payment V2. |
+| Partner/offer/order/commission/settlement | **MISSING** | Không có source hoặc migration. |
+| AI partner/product | **MISSING** | Không có source, schema, provider adapter hoặc job. |
+
+### 5.2 Checkout và order snapshot hiện tại
+
+`CheckoutService.checkout`:
+
+1. Resolve current `User` từ principal username.
+2. Insert/lock `checkout_requests` theo `(user_id, idempotency_key)` và so SHA-256 request hash.
+3. Lock cart lines + products `FOR UPDATE`; kiểm `active`, quantity và `on_hand - reserved`.
+4. Tính subtotal từ DB price; claim fixed coupon; reserve point lots.
+5. Tạo `Order(CREATED)`, insert SQL `order_items`, tăng `reserved_quantity`, tạo reservations.
+6. Tạo `Payment(AWAITING_PAYMENT_METHOD)` và lưu response snapshot.
+
+Đây là nền tảng đúng hướng cho partner checkout nhưng phải đổi cart line từ `product_id` sang selected `offer_id`, lock offers theo ID, snapshot partner/commission và tạo `PartnerOrder` trong cùng transaction.
+
+### 5.3 Payment, refund, loyalty và event reliability
+
+- `CheckoutService.initiate` xác minh payment/order thuộc current user, state và expiry; request chỉ có `paymentMethodId`; amount/currency lấy từ snapshot; tạo Main outbox `payment.requested.v2`.
+- Payment V2 listener lưu inbox + `PaymentOperation`; worker gọi Stripe ngoài DB transaction với key `payment-{mainPaymentId}`, rồi lưu terminal state và outbox result. Non-terminal/exception chuyển `UNKNOWN` và phát review event, nhưng claim query có thể lấy `UNKNOWN` để gọi lại; cần reconciliation policy rõ thay vì dựa ngầm vào Stripe idempotency.
+- Payment success ở Main commit inventory/promotion/point reservation, tạo earned lot và spend ledger. Payment failure release reservations.
+- Refund MVP là full amount `order.totalAmount`; success ghi spend âm và reverse loyalty. Không tự restock — phù hợp vì financial refund không chứng minh hàng đã trả.
+- `RefundResultV2Consumer` truyền `refund.getVersion()` khi optimistic-update `Order`; đây không phải `order.version`, có thể gây conflict sai hoặc update nhầm kỳ vọng. Phải load/lock Order và dùng đúng version.
+- Mismatch payment đưa Main vào `REVIEW`; mismatch refund chỉ tạo alert và mark inbox, nhưng không có explicit refund review state/operational resolution.
+
+### 5.4 V1/V2 coexistence và notification
+
+- `/api/order` vẫn nhận `OrderDTO.totalAmount` và `OrderDTO.status`, sau đó converter gán thẳng vào entity. Đây là client-authoritative money/status và không tạo order items/reservations.
+- `/api/payment/{orderId}` vẫn tạo payment theo order ID và gửi V1 event trực tiếp; không kiểm order ownership. `PaymentDTO.orderId/amount` được nhận dù service không dùng để tính amount; endpoint vẫn là IDOR command risk và xung đột unique payment/order của V4.
+- Main V1 `PaymentEventListener` catch-and-swallow exception và phát notification V1 trực tiếp. Payment V2 success hiện không tạo notification request.
+- Notification V1 listener catch-and-swallow. `EmailNotificationSender.send` cũng catch exception mà không rethrow, vì vậy caller có thể đánh dấu notification `SENT` dù SMTP thất bại.
+- Notification V2 tạo row, gửi SMTP, rồi đánh dấu inbox trong cùng transaction; có business unique key nhưng chưa tách durable receive và external send. `claimed_by/claimed_at` được migrate nhưng chưa có worker sử dụng.
+
+Kết luận: checkout/payment/inventory/refund/loyalty/outbox/inbox là **shared transaction foundation**, không phải mục tiêu trung tâm mới. Phase 0 phải cutover khỏi V1 và sửa defects trước khi partner settlement phụ thuộc vào dữ liệu này.
+
+## 6. Technical debt và security backlog ưu tiên
+
+| Mức | Vấn đề | File/class/method | Hướng xử lý |
+|---|---|---|---|
+| P0 | Public client tự chọn `ADMIN` | `RegisterDTO.role`, `AuthServiceImpl.register`, `SecurityConfig` | Public registration luôn USER; admin provisioning riêng, audit và rate limit. |
+| P0 | Seller xóa product không sở hữu | `ProductServiceImpl.delete` | Tenant-scoped repository/policy; test Seller A/B. |
+| P0 | Payment V1 thao tác order khác | `PaymentServiceImpl.pay` | Disable/cutover V1; trước cutover bắt buộc ownership/state/idempotency. |
+| P0 | Order V1 nhận total/status từ client | `OrderDTO`, `OrderServiceImpl.placeOrder` | Deprecate/disable; chỉ checkout server-authoritative tạo order. |
+| P1 | JPA `mappedBy` sai | `User.products` | Sửa thành `user`; sau offer cutover loại association legacy. |
+| P1 | Refund optimistic version sai | `RefundResultV2Consumer.onRefundResult` | Dùng loaded `Order.version`, không dùng `Refund.version`. |
+| P1 | V1/V2 cùng chạy | controllers/listeners/producers hai thế hệ | Feature flag, metrics, dual-read có kiểm soát, rồi disable V1. Không dual-charge. |
+| P1 | Notification false success/delivery ambiguity | `EmailNotificationSender`, `NotificationServiceImpl` | Durable send operation; sender rethrow; bounded retry, UNKNOWN/manual review. |
+| P1 | Product list không filter active/moderated | `ProductServiceImpl.getAllProducts/search` | Public query chỉ approved offer + approved partner + available policy. |
+| P1 | Category/entity mass assignment | `ProductDTO.categories` | Command DTO nhận IDs; resolve/allowlist server-side. |
+| P1 | Username/email thiếu DB unique constraint | Main V1 migration + `UserRepository` | Data audit rồi additive unique constraints; identity scope dùng user ID. |
+| P1 | Product owner nullable | Main V1 schema | Quarantine/manual mapping khi backfill. |
+| P1 | Hardcoded dev credentials | application/docker config | Secret manager/env, rotate committed JWT/DB values, tách dev sample. |
+| P2 | Actuator và Swagger permit-all | `SecurityConfig` | Health tối thiểu public; admin/network policy cho phần còn lại. |
+| P2 | Product/photo BLOB và upload validation | `Product.photo`, upload methods | Object storage, MIME/size/scan/checksum. |
+| P2 | Test baseline fail | `ProductControllerTest` | Sửa fixture/content type; đưa reactor về xanh trước phase partner. |
+
+Lần chạy xác minh ngày 2026-07-12 cho kết quả:
+
+- Reactor `mvn -pl ecommerce-platform-server,ecommerce-platform-payment-service,ecommerce-platform-notification-service test` dừng ở Main: `ProductControllerTest` fail 15/29 do expected 200/400/403 nhưng nhận 415.
+- Chạy riêng Payment Service: 42 tests, 22 errors do Mockito inline Byte Buddy không self-attach được vào JVM của môi trường; đây là test-runtime/tooling failure nên chưa chứng minh các test nghiệp vụ pass hay fail.
+- Chạy riêng Notification Service: 36 tests pass.
+
+Đây là baseline cần sửa/chuẩn hóa trong CI, không phải lỗi do tài liệu này và không được dùng số test đã pass để suy ra flow production hoàn chỉnh.
+
+## 7. Quyết định mô hình Product–Partner
+
+### 7.1 So sánh hai phương án
+
+| Tiêu chí | A — `Product.partner_id` | B — `Product` + `PartnerOffer` |
+|---|---|---|
+| Ý nghĩa Product | Listing thuộc đúng một partner | Catalog dùng chung; offer chứa seller-specific commercial data |
+| Giá/SKU/stock | Trực tiếp trên Product | Trên PartnerOffer |
+| Ưu điểm | Migration gần mô hình hiện tại; ít join; UI và checkout đổi ít hơn | Hỗ trợ nhiều nguồn cung; tách content moderation khỏi offer; commission/inventory/price rõ theo partner; không phải đổi model lần hai |
+| Nhược điểm | Trùng catalog; khó so sánh offer; muốn marketplace sau này phải đổi cart/order/inventory lần nữa | Thêm entity/state/join; cần quy tắc chọn offer và hai lớp moderation; migration/cart/frontend phức tạp hơn |
+| Migration | Backfill `partner_id` từ `user_id`; chuyển stock/price ít | Tạo một catalog Product + một offer cho mỗi legacy Product; chuyển price/stock vào offer; giữ compatibility mapping |
+| Checkout/cart | Cart giữ product ID; snapshot thêm partner | Cart phải giữ offer ID; checkout lock/reserve offer; product chỉ để hiển thị |
+| OrderItem | product + partner snapshot | product + offer + partner snapshot, đúng nguồn cung lịch sử |
+| Inventory | Product-level | Offer-level; sẵn sàng thêm warehouse sau |
+| Promotion | Dễ cho product; khó partner-funded/shared | Có thể target catalog/product hoặc offer/partner và lưu funding allocation |
+| Frontend | Ít thay đổi; mỗi card là listing | Product detail phải chọn/default offer; partner dashboard quản lý offer |
+
+### 7.2 Đề xuất MVP: Phương án B với migration bảo thủ
+
+Chọn B vì các yêu cầu cốt lõi đã bao gồm inventory theo đối tác, multi-partner order, commission snapshot và settlement. Nếu chọn A để tiết kiệm ngắn hạn, Phase marketplace sau phải thay đổi đúng các bảng có tính bất biến và rủi ro cao nhất: cart item, order item, inventory reservation, promotion allocation và refund/settlement lineage.
+
+Trade-off được kiểm soát như sau:
+
+- Mỗi legacy Product tạo một catalog Product riêng và một PartnerOffer tương ứng; chưa deduplicate tự động.
+- Trong MVP, mỗi cart line chọn đúng một offer; hệ thống có thể hiển thị một default approved offer, chưa cần ranking phức tạp.
+- Content Product có thể do partner khởi tạo nhưng sau khi approved trở thành catalog record do platform quản trị; partner chỉnh commercial fields ở Offer. Thay đổi content trọng yếu tạo submission/review thay vì ghi trực tiếp.
+- Inventory chuyển sang Offer. Các cột stock/price cũ trên Product được dual-read/dual-write có thời hạn, rồi bỏ sau cutover.
+- `offerId` là bắt buộc với order mới; order lịch sử có thể để nullable và đánh dấu `LEGACY` nếu không backfill chắc chắn.
+
+## 8. Mô hình nghiệp vụ và dữ liệu mục tiêu
+
+Tất cả money dùng `DECIMAL(19,2)`/`BigDecimal`, currency snapshot; các aggregate có `version`; timestamp lưu UTC; trạng thái do server quyết định. Các bảng nghiệp vụ quan trọng có audit log và business uniqueness.
+
+### 8.1 Partner
+
+```text
+Partner
+  id, code, name, businessName, taxCode, email, phone, address
+  status: DRAFT | PENDING_REVIEW | CHANGES_REQUESTED | APPROVED | REJECTED | SUSPENDED | TERMINATED
+  approvedAt, approvedBy, rejectedAt, rejectionReason
+  suspendedAt, suspensionReason
+  version, createdAt, updatedAt
+```
+
+Constraints/indexes:
+
+- Unique normalized `code` và `taxCode` (policy country/format do owner xác nhận).
+- Index `(status, created_at)`, `(tax_code)`, `(approved_by)`.
+- Status transition bằng conditional update/version; không nhận status trong profile DTO.
+- `TERMINATED` là terminal trong MVP; restore chỉ từ `SUSPENDED` về `APPROVED`.
+
+### 8.2 PartnerMember
+
+```text
+PartnerMember
+  id, partnerId, userId
+  role: OWNER | MANAGER | PRODUCT_STAFF | ORDER_STAFF | FINANCE_STAFF
+  status: INVITED | ACTIVE | SUSPENDED | REMOVED
+  joinedAt, createdAt, updatedAt, version
+```
+
+- Unique `(partner_id, user_id)` cho membership hiện tại hoặc dùng history table nếu cần rejoin.
+- Một user **nên được phép thuộc nhiều partner**; active partner context phải explicit, không suy từ username/JWT role duy nhất.
+- Không được xóa OWNER cuối cùng; transfer ownership là command riêng.
+- System role `PARTNER` chỉ nói user có khả năng vào partner area; quyền thực tế lấy từ active membership.
+
+### 8.3 PartnerDocument
+
+```text
+PartnerDocument
+  id, partnerId, type, status
+  objectKey, originalFileName, contentType, size, checksum
+  uploadedBy, reviewedBy, reviewedAt, rejectionReason
+  expiresAt, version, createdAt, updatedAt
+```
+
+Loại: business license, tax document, verification, contract, bank evidence. Database chỉ lưu metadata/object key. Object storage mã hóa at rest, signed URL ngắn hạn, malware scan, retention và access audit. Không log nội dung tài liệu hoặc bank data.
+
+### 8.4 Product và PartnerOffer
+
+`Product` trở thành catalog content: `id, canonicalSku(optional), name, description, brand, category links, media metadata, contentStatus, version, timestamps`. Giá và stock không còn authoritative ở Product.
+
+```text
+PartnerOffer
+  id, partnerId, productId, partnerSku
+  price, currency
+  onHandQuantity, reservedQuantity
+  status: DRAFT | PENDING_REVIEW | APPROVED | REJECTED | SUSPENDED | OUT_OF_STOCK | ARCHIVED
+  submittedAt, approvedAt, approvedBy, rejectionReason
+  version, createdAt, updatedAt
+```
+
+Constraints:
+
+- Unique `(partner_id, partner_sku)`; cân nhắc unique `(partner_id, product_id)` nếu MVP chỉ một offer/partner/product.
+- Checks `price > 0`, `on_hand >= 0`, `reserved >= 0`, `reserved <= on_hand`.
+- Public sellable predicate: partner `APPROVED` AND offer `APPROVED` AND catalog content approved AND active policy AND available quantity > 0.
+- `OUT_OF_STOCK` nên là derived/display state hoặc controlled projection; không để race giữa status và quantity. Authoritative approval status tách khỏi availability nếu triển khai chi tiết.
+- Soft delete qua `ARCHIVED`; không hard-delete offer có order/reservation/audit lineage.
+
+Khuyến nghị thêm `ProductSubmission` hoặc versioned `ProductRevision` để review thay đổi content mà không ghi đè bản đang bán. Offer submission xử lý commercial fields; content submission xử lý name/description/category/media.
+
+### 8.5 PartnerOrder và OrderItem snapshot
+
+```text
+PartnerOrder
+  id, orderId, partnerId
+  status
+  subtotal, discountAllocation, shippingAllocation
+  commissionAmount, partnerPayableAmount, currency
+  acceptedAt, packedAt, readyToShipAt, shippedAt, deliveredAt, cancelledAt
+  version, createdAt, updatedAt
+```
+
+- Unique `(order_id, partner_id)` trong MVP; nếu sau này nhiều fulfillment group/kho thì thêm group key.
+- Partner chỉ query theo membership-scoped partner ID, không `findById` đơn thuần.
+- Order tổng giữ customer/payment state; `PartnerOrder` giữ fulfillment/partner financial state.
+
+`order_items` bổ sung immutable snapshot tối thiểu:
+
+```text
+partner_order_id
+partner_id, partner_name
+offer_id, partner_sku
+product_id, product_name
+unit_price, quantity, currency
+discount_allocation, shipping_allocation
+commission_rule_id, commission_rate, commission_fixed_fee
+commission_amount, partner_payable_amount
+```
+
+Không tính lại commission lịch sử từ rule hiện tại. Refund/settlement dùng snapshot và append-only adjustment line.
+
+### 8.6 CommissionRule
+
+```text
+CommissionRule
+  id
+  partnerId nullable
+  categoryId nullable
+  productId nullable
+  rate, fixedFee, currency nullable
+  validFrom, validTo, priority
+  status: DRAFT | ACTIVE | INACTIVE | EXPIRED
+  version, createdAt, updatedAt
+```
+
+Precedence đề xuất:
+
+1. Product-specific.
+2. Category-specific.
+3. Partner-specific.
+4. System default.
+
+Trong cùng specificity: priority cao hơn, rồi `validFrom` mới hơn, rồi ID để deterministic. Không cho hai active rule cùng scope/priority/time range nếu gây ambiguity. Commission engine trả cả rule ID và input/output snapshot.
+
+### 8.7 Settlement và SettlementLine
+
+```text
+Settlement
+  id, partnerId, periodStart, periodEnd, currency
+  grossSales, refundAmount, commissionAmount, otherFees
+  manualAdjustment, payableAmount
+  status: OPEN | CALCULATED | UNDER_REVIEW | APPROVED | PAID | FAILED | CANCELLED
+  approvedBy, approvedAt, paidAt, paymentReference
+  version, createdAt, updatedAt
+```
+
+Business key đề xuất: unique `(partner_id, period_start, period_end, currency, calculation_version)` hoặc một active settlement/kỳ và revision history riêng.
+
+```text
+SettlementLine
+  id, settlementId, partnerId
+  lineType: SALE | DISCOUNT | COMMISSION | REFUND | FEE | SHIPPING | ADJUSTMENT
+  orderId, partnerOrderId, orderItemId, refundId nullable
+  sourceEventId/businessKey, amount, currency
+  description, adjustmentReason, createdBy, createdAt
+```
+
+- Mỗi dòng truy vết tới source; không chỉ lưu tổng.
+- Unique business key chống ghi trùng, ví dụ `(settlement_id, line_type, source_entity, source_id, component)`.
+- Adjustment thủ công bắt buộc reason, actor, before/after audit; không sửa line nguồn.
+- Settlement approved/paid là immutable; sai sót sửa bằng adjustment/carry-forward, không rewrite lịch sử.
+
+### 8.8 Audit và operational tables
+
+`audit_events`: `id, aggregateType, aggregateId, partnerId, action, fromState, toState, actorUserId, actorType, reason, correlationId, requestId, metadataRedacted, occurredAt`.
+
+`idempotency_requests`: có thể dùng table theo command hoặc generic table với unique `(actor_scope, operation, key)`, canonical request hash và response snapshot. Không lưu payment method, tài liệu hoặc PII nhạy cảm trong response/audit.
+
+## 9. Quy trình nghiệp vụ mục tiêu
+
+### 9.1 Đăng ký và phê duyệt đối tác
+
+1. Authenticated USER tạo application `DRAFT`; server gán applicant, không nhận owner/admin IDs.
+2. Validate required data, normalized tax code, email/phone, document metadata và duplicate candidates.
+3. Submit bằng command idempotent: `DRAFT/CHANGES_REQUESTED/REJECTED -> PENDING_REVIEW`; đóng băng revision được review; phát event outbox.
+4. Admin xem profile/documents và chọn approve, reject hoặc yêu cầu bổ sung. Yêu cầu bổ sung chuyển sang `CHANGES_REQUESTED`, lưu danh sách thiếu/reason và cho applicant tạo revision mới; không dùng `REJECTED` để biểu diễn hai ý nghĩa khác nhau.
+5. Admin approve/reject bằng conditional transition/version và command key.
+6. Approve tạo/activate `PartnerMember(applicant, OWNER)` trong cùng transaction và gán system `PARTNER` nếu không có membership partner nào trước đó.
+7. Mọi transition ghi audit + outbox trong cùng DB transaction.
+
+Edge cases:
+
+- Trùng tax code: DB unique là lớp cuối; application trùng trả conflict và reference case hiện hữu cho admin, không tiết lộ hồ sơ cho applicant khác.
+- User nhiều partner: cho phép theo đề xuất; mỗi request partner command resolve active membership và resource scope.
+- Suspend partner: account user vẫn hoạt động cho customer/partner khác; chỉ chặn scope partner bị suspend. Đơn đang xử lý theo policy owner xác nhận.
+- Restore: chỉ admin, `SUSPENDED -> APPROVED`, reason bắt buộc và re-evaluate documents nếu hết hạn.
+- Terminate: không restore trong MVP; giữ data/audit/settlement obligations.
+- Hai admin approve đồng thời: optimistic version + unique owner membership + idempotent event business key; loser nhận current state/409 tùy same command.
+
+### 9.2 Đăng và kiểm duyệt sản phẩm/offer
+
+1. `OWNER|MANAGER|PRODUCT_STAFF` tạo catalog draft/submission và PartnerOffer `DRAFT` trong partner scope.
+2. Partner sửa allowed fields: partnerSku, price, stock qua inventory command, offer-specific media/attributes nếu policy cho phép. Không sửa approval actor/status/commission/payable.
+3. Submit `DRAFT|REJECTED -> PENDING_REVIEW`; server snapshot revision.
+4. Admin approve/reject/suspend. Chỉ approved catalog + approved offer + approved partner mới public.
+5. Thay đổi trọng yếu name/brand/category/media hoặc price vượt threshold tạo revision/re-review. Stock quantity không cần moderation; price policy owner xác nhận.
+6. Khi partner suspended, offers bị loại khỏi sellable projection; không cần rewrite tất cả offer status nếu predicate đã gồm partner status. Có thể phát projection events để cache/search cập nhật.
+7. Cart giữ offer ID. Nếu offer/partner không còn sellable, cart line vẫn có thể hiển thị “unavailable” để user biết nhưng checkout phải từ chối; không tự đổi sang offer khác hoặc giá khác.
+8. Soft delete bằng archive. Offer có reservation/order không hard-delete.
+
+Admin-only: canonical category taxonomy, approval/suspension, protected brand/compliance flags. Partner-editable: draft content theo policy và offer commercial data. Inventory thay đổi qua delta command/reason, không `PUT` toàn entity.
+
+### 9.3 Checkout và chia đơn theo partner
+
+Trong một Main DB transaction:
+
+1. Resolve each cart line to immutable selected `offer_id`; query offer + product + partner sellable state.
+2. Lock offers theo ascending offer ID; validate available stock và current price.
+3. Tính promotion/funding allocations và chọn commission rule deterministic cho từng line.
+4. Tạo một customer `Order` tổng.
+5. Group lines theo partner và tạo một `PartnerOrder(NEW)`/partner.
+6. Insert immutable `OrderItem` snapshots gồm partner/offer/product/price/discount/commission/payable.
+7. Reserve inventory đúng offer; uniqueness `(order_id, offer_id)`.
+8. Tạo payment snapshot cho customer total; lưu idempotent checkout response.
+9. Sau commit, outbox phát `PartnerOrderCreatedEvent` vào thời điểm business đã chốt. Đề xuất chỉ notify partner sau payment success để tránh đơn chưa trả; nếu cần pre-payment visibility phải có state riêng `AWAITING_PAYMENT`.
+
+Payment Service tiếp tục xử lý dòng tiền **Customer → Platform**. Payment success commit offer reservations và kích hoạt fulfillment. Không gửi một charge cho từng partner.
+
+Order tổng hợp trạng thái bằng projection/rules, không để partner ghi trực tiếp `Order.status`. Ví dụ:
+
+- Tất cả PartnerOrder delivered → Order fulfillment `DELIVERED`.
+- Có mix delivered/cancelled → `PARTIALLY_FULFILLED` hoặc trạng thái tổng được owner xác nhận.
+- Một PartnerOrder rejected trước fulfillment → policy cancel line/partial order hoặc cancel toàn order; đây là owner decision.
+- Customer payment state tách khỏi fulfillment state để tránh enum Order phình và transition mơ hồ.
+
+### 9.4 State machine PartnerOrder
+
+Happy path:
+
+```text
+NEW -> ACCEPTED -> PACKING -> READY_TO_SHIP -> SHIPPED -> DELIVERED
+```
+
+Error/return path:
+
+```text
+NEW -> REJECTED
+ACCEPTED|PACKING|READY_TO_SHIP -> CANCELLED
+DELIVERED -> RETURN_REQUESTED -> RETURNED
+```
+
+| Command | Actor | Pre-state | Side effect | Event | Duplicate/audit/order tổng |
+|---|---|---|---|---|---|
+| create | System checkout/payment flow | none | Snapshot totals/commission; assign partner | `PartnerOrderCreatedEvent` | Unique order+partner; audit SYSTEM; aggregate count. |
+| accept | OWNER/MANAGER/ORDER_STAFF | NEW | `acceptedAt`; start SLA | `PartnerOrderAcceptedEvent` | Command key + version; duplicate same request returns current; aggregate fulfillment. |
+| reject | OWNER/MANAGER/ORDER_STAFF | NEW | reason; release/cancel affected allocation per policy; refund/adjustment if paid | `PartnerOrderRejectedEvent` | Reason required; cannot repeat with new reason silently; recalc aggregate. |
+| packing | OWNER/MANAGER/ORDER_STAFF | ACCEPTED | `packedAt` optional; no money mutation | `PartnerOrderPackingEvent` | Conditional update; audit. |
+| ready-to-ship | OWNER/MANAGER/ORDER_STAFF | PACKING | `readyToShipAt`; handoff eligibility | `PartnerOrderReadyToShipEvent` | Conditional update; audit. |
+| ship | OWNER/MANAGER/ORDER_STAFF or trusted carrier | READY_TO_SHIP | tracking snapshot, `shippedAt` | `PartnerOrderShippedEvent` | Unique carrier/tracking operation; aggregate. |
+| deliver | trusted carrier/admin; partner only if policy allows | SHIPPED | `deliveredAt`; starts settlement/return window | `PartnerOrderDeliveredEvent` | Delivery evidence; business key; aggregate and settlement eligibility. |
+| cancel | Admin/system; partner role only before shipment per policy | ACCEPTED/PACKING/READY_TO_SHIP | reason; compensation/refund/release rules | `PartnerOrderCancelledEvent` | Concurrent accept/cancel protected by version; aggregate/payment compensation. |
+| request return | Customer/admin | DELIVERED | return case; no immediate restock/payout reversal | `PartnerOrderReturnRequestedEvent` | One active return per line/case; audit. |
+| returned | Admin/warehouse | RETURN_REQUESTED | inspected inventory adjustment; refund/settlement line | `PartnerOrderReturnedEvent` | Evidence + condition; aggregate and finance adjustment. |
+
+Mọi command kiểm `system permission AND active membership AND same partner resource AND allowed partner status`, có correlation/idempotency key, audit và outbox cùng transaction.
+
+### 9.5 Hoa hồng, discount funding và settlement
+
+Hai dòng tiền độc lập:
+
+```text
+Customer -> Platform  (Payment Service, charge/refund)
+Platform -> Partner   (Settlement domain, MVP manual payout marking)
+```
+
+Line formula:
+
+```text
+partnerPayable =
+    grossProductRevenue
+    - partnerFundedDiscount
+    - platformCommission
+    - refundedAmount
+    - partnerFees
+    + shippingPayable
+    + manualAdjustment
+```
+
+Order/settlement tổng là sum các immutable line components, không suy lại từ current rules.
+
+Funding policy phải được snapshot:
+
+- Platform-funded promotion: giảm customer total nhưng không giảm partner payable; platform chịu cost.
+- Partner-funded: phân bổ vào đúng partner/order items và trừ payable.
+- Shared: lưu hai allocation riêng, tổng bằng customer discount.
+- Shipping: tách customer charge, carrier cost và partner share; không gộp vào merchandise commission nếu policy không nói vậy.
+- Cancel/failed delivery trước eligibility: sale không vào settlement hoặc tạo reversal line nếu đã close.
+- Full/partial refund: tạo refund allocation theo order item/partner; nếu settlement OPEN/CALCULATED thì cập nhật kỳ đó, nếu APPROVED/PAID thì carry-forward kỳ sau bằng adjustment/reversal line.
+- Manual adjustment: admin finance only, reason + evidence + four-eyes approval nếu vượt threshold.
+
+MVP settlement:
+
+1. Worker idempotent chọn eligible delivered lines trong `[periodStart, periodEnd)` theo UTC và lock/business uniqueness.
+2. Tạo `Settlement(CALCULATED)` + traceable lines.
+3. Admin finance review, thêm adjustment hợp lệ, chuyển `UNDER_REVIEW -> APPROVED`.
+4. Sau khi chuyển khoản ngoài hệ thống, admin `mark-paid` với payment reference và paidAt.
+5. Không tích hợp payout tự động trong MVP.
+
+## 10. Phân quyền và bảo mật mục tiêu
+
+### 10.1 Hai lớp role
+
+System roles:
+
+```text
+USER | PARTNER | ADMIN
+```
+
+Giữ `SELLER` tạm thời cho compatibility. Không map `SELLER -> PARTNER` chỉ bằng JWT; phải có backfilled active `PartnerMember`. Sau cutover, token/authorization dùng `PARTNER` capability và membership DB/policy service.
+
+Partner roles:
+
+```text
+OWNER | MANAGER | PRODUCT_STAFF | ORDER_STAFF | FINANCE_STAFF
+```
+
+Permission matrix MVP:
+
+| Capability | OWNER | MANAGER | PRODUCT_STAFF | ORDER_STAFF | FINANCE_STAFF | ADMIN |
+|---|---:|---:|---:|---:|---:|---:|
+| Profile/member management | yes | limited | no | no | no | all/review |
+| Offer create/update/submit | yes | yes | yes | no | no | moderate |
+| Inventory adjustment | yes | yes | yes | limited/no | no | override with audit |
+| PartnerOrder fulfillment | yes | yes | no | yes | read | all/exception |
+| Settlement read | yes | yes | no | no | yes | all |
+| Settlement approve/mark-paid | no | no | no | no | no | admin finance permission only |
+
+### 10.2 Authorization invariant
+
+Mọi partner API phải thỏa:
+
+```text
+authenticated system principal has capability
+AND active PartnerMember has required internal role
+AND requested resource.partner_id equals membership.partner_id
+AND Partner.status allows the command
+AND resource state allows the command
+```
+
+Implementation nên tập trung ở `PartnerAuthorizationService`/policy component và tenant-scoped repository query, không copy username comparisons trong controller/service. Với `/me`, partner context lấy từ trusted header/path selection đã validate membership hoặc explicit partner ID; không suy từ client payload.
+
+### 10.3 Threats phải chặn
+
+- IDOR trên `productId`, `offerId`, `partnerId`, `partnerOrderId`, `settlementId`, document ID.
+- Seller/partner A xóa hoặc sửa resource B; partner A xem order/settlement B.
+- Finance staff sửa product; Product staff approve settlement; partner tự approve profile/offer.
+- Client đặt `status`, `partnerId`, `approvedBy`, `price snapshot`, commission, discount funding hoặc payable.
+- Over-posting nested `Category`, `Partner`, `Member` entities.
+- Suspended partner tiếp tục command qua JWT cũ; authorization phải kiểm DB/current cached status và invalidation event.
+- Race approve/accept/cancel/settlement bằng optimistic lock + conditional transitions.
+- File upload abuse, PII/tax/bank document leakage, sensitive payload trong logs/events.
+- Public registration privilege escalation; system role changes chỉ trusted admin workflow.
+
+SecurityConfig target deny-by-default, endpoint matchers coarse-grained và method/domain policy fine-grained. Rate limit auth, application submit, upload, moderation commands; restrict actuator/Swagger; validate JWT issuer/audience khi triển khai production hardening.
+
+## 11. API mục tiêu
+
+Các API dưới đây là proposal, chưa tồn tại. Command DTO không chứa authoritative fields. Tất cả command quan trọng nhận `Idempotency-Key`; version có thể dùng `If-Match` hoặc body `expectedVersion` server-validated.
+
+### 11.1 Partner application/profile
 
 ```http
-POST /api/orders/checkout
-Idempotency-Key: <UUID>
-Content-Type: application/json
-
-{"requestedPoints":20,"couponCode":"OPTIONAL","currency":"EUR"}
+POST /api/partners/applications
+GET  /api/partners/me
+PUT  /api/partners/me
+GET  /api/partners/me/status
+POST /api/partners/me/submit
 ```
 
-Không nhận price, total, order status hoặc payment status. Main transaction:
+Nếu user có nhiều partner, `/me` cần active partner context rõ; phương án sạch hơn là `/api/partners/{partnerId}/...` với membership policy, còn `/me` chỉ trả memberships/default context.
 
-1. Authenticate user; insert/lock checkout idempotency record và so request hash.
-2. Lock/read cart, product; reprice từ DB.
-3. Validate/claim promotion, inventory và point lots theo lock order.
-4. Tạo `Order(CREATED)`, immutable `OrderItem` snapshot và ba loại reservation cùng expiry.
-5. Tạo `Payment(AWAITING_PAYMENT_METHOD)` với amount/currency snapshot.
-6. Lưu response snapshot rồi commit. **Không tạo `PaymentRequestedEventV2` và không ghi PaymentMethod ID.**
-
-```json
-{
-  "orderId":100,
-  "paymentId":200,
-  "amount":"100.00",
-  "currency":"EUR",
-  "paymentStatus":"AWAITING_PAYMENT_METHOD",
-  "reservationExpiresAt":"2026-07-11T15:00:00Z"
-}
-```
-
-### 3.2 Payment initiation — đây mới là nơi phát event
+### 11.2 Partner members
 
 ```http
-POST /api/payments/{paymentId}/initiate
-Idempotency-Key: <UUID>
-Content-Type: application/json
-
-{"paymentMethodId":"pm_xxx"}
+GET    /api/partners/me/members
+POST   /api/partners/me/members
+PUT    /api/partners/me/members/{memberId}
+DELETE /api/partners/me/members/{memberId}
 ```
 
-Main transaction:
+Invite bằng user ID/email lookup an toàn; không trả thông tin account ngoài scope; transfer-owner command riêng được khuyến nghị.
 
-1. Insert/lock payment initiation idempotency record; authenticate và verify payment/order thuộc user.
-2. Lock payment, order và reservation headers; yêu cầu `Payment=AWAITING_PAYMENT_METHOD`, `Order=CREATED`, chưa hết checkout deadline.
-3. Verify payment amount/currency bằng immutable order snapshot; không tin request.
-4. Conditional/version update Payment `AWAITING_PAYMENT_METHOD -> PENDING`, Order `CREATED -> PAYMENT_PENDING`.
-5. Insert Main outbox `PaymentRequestedEventV2`; event payload chứa PaymentMethod ID theo security policy.
-6. Store response snapshot đã loại PaymentMethod ID; commit. Publisher phát sau commit.
+### 11.3 Admin partner management
 
-Response trả `paymentId`, `orderId`, status `PENDING` và cùng amount/currency snapshot; tuyệt đối không echo PaymentMethod ID. HTTP 409 áp dụng khi payment đã expired/cancelled, state không cho phép, hoặc cùng idempotency key khác payload.
+```http
+GET  /api/admin/partners
+GET  /api/admin/partners/{partnerId}
+POST /api/admin/partners/{partnerId}/approve
+POST /api/admin/partners/{partnerId}/reject
+POST /api/admin/partners/{partnerId}/suspend
+POST /api/admin/partners/{partnerId}/restore
+POST /api/admin/partners/{partnerId}/terminate
+```
 
-Cùng user+Idempotency-Key+cùng canonical payload trả response cũ; cùng key khác payload trả 409. Key khác cho payment đã initiated trả current state, không tạo request/charge mới; business constraint `UNIQUE(payment_id)` trên initiation operation và outbox business key bảo vệ lớp cuối.
+### 11.4 Partner offers và moderation
 
-Cancel trước initiation dùng `POST /api/orders/{orderId}/cancel` với Idempotency-Key UUID và request body chỉ có reason. Nó chỉ chấp nhận `CREATED/AWAITING_PAYMENT_METHOD`; sau initiation trả conflict/operation-not-supported cho customer trong MVP.
+```http
+POST /api/partner/offers
+PUT  /api/partner/offers/{offerId}
+GET  /api/partner/offers
+GET  /api/partner/offers/{offerId}
+POST /api/partner/offers/{offerId}/submit
+POST /api/partner/offers/{offerId}/archive
+POST /api/partner/offers/{offerId}/inventory-adjustments
 
-### 3.3 Stripe flow duy nhất
+GET  /api/admin/product-submissions
+GET  /api/admin/product-submissions/{submissionId}
+POST /api/admin/product-submissions/{submissionId}/approve
+POST /api/admin/product-submissions/{submissionId}/reject
+POST /api/admin/product-submissions/{submissionId}/suspend
+```
 
-UI tạo PaymentMethod bằng Elements → gọi payment initiation → Main outbox → Payment Service tạo/confirm PaymentIntent server-side với Stripe idempotency key ổn định → Payment Service outbox terminal result → Main inbox. Không trộn `confirmCardPayment`/webhook trong MVP. `requires_action` hoặc network ambiguity đi `UNKNOWN`/reconciliation, không được coi là success/failure.
+Không dùng generic PUT để set stock tuyệt đối nếu có concurrent reservation; inventory adjustment là delta + reason + idempotency key.
 
-## 4. Money và công thức điểm
+### 11.5 Partner orders
 
-Money Java/DB dùng `BigDecimal`/`DECIMAL(19,2)`. Input money `setScale(2, HALF_UP)`; line base = unit price × integer quantity rồi scale 2 `HALF_UP`; percentage/multiplier lưu scale 4; line discount nhân rồi scale 2 `HALF_UP`. Tổng cộng/trừ scale 2. Không tạo `BigDecimal` từ `double`.
+```http
+GET  /api/partner/orders
+GET  /api/partner/orders/{partnerOrderId}
+POST /api/partner/orders/{partnerOrderId}/accept
+POST /api/partner/orders/{partnerOrderId}/reject
+POST /api/partner/orders/{partnerOrderId}/packing
+POST /api/partner/orders/{partnerOrderId}/ready-to-ship
+POST /api/partner/orders/{partnerOrderId}/ship
+```
+
+List/detail luôn tenant-filter ở query. Transition command body chỉ chứa reason/tracking/evidence fields phù hợp, không chứa next status.
+
+### 11.6 Settlement
+
+```http
+GET  /api/partner/settlements
+GET  /api/partner/settlements/{settlementId}
+
+GET  /api/admin/settlements
+POST /api/admin/settlements/calculate
+POST /api/admin/settlements/{settlementId}/approve
+POST /api/admin/settlements/{settlementId}/mark-paid
+POST /api/admin/settlements/{settlementId}/adjustments
+```
+
+`calculate` có business uniqueness partner+period+currency; `approve` và `mark-paid` có state/version/idempotency; payment reference không được ghi đè sau PAID.
+
+## 12. Event và notification
+
+### 12.1 Envelope chung
+
+Mọi critical event dùng:
 
 ```text
-subtotal = Σ(unitPrice × paidQuantity); gift unit không tính
-
-grandTotal = max(0,
-  subtotal - productDiscount - orderDiscount - couponDiscount
-  - redeemedPointValue + shippingFee)
-
-qualifyingAmount = max(0,
-  subtotal - productDiscount - orderDiscount - couponDiscount
-  - redeemedPointValue)
-
-earnedPoints = floor((qualifyingAmount / moneyPerPoint) × membershipMultiplier)
+eventId, eventType, eventVersion, occurredAt
+correlationId, aggregateId, producer, idempotencyKey
 ```
 
-`redeemedPointValue = points × pointValue`, scale 2 `HALF_UP`, capped bởi qualifying merchandise. Chia với scale 8 `DOWN`, nhân multiplier scale 4 và chỉ làm tròn point một lần ở cuối bằng scale 0 `DOWN`. Không kiếm điểm cho shipping, gift hoặc phần trả bằng điểm.
+- `eventId`: unique message ID.
+- `idempotencyKey`: stable business operation key, không thay bằng event ID.
+- Kafka key: aggregate cần ordering (`partnerId`, `offerId`, `partnerOrderId` hoặc `settlementId`).
+- Producer outbox và consumer inbox marker phải commit cùng business transaction.
+- Contract schema/version nằm ở shared schema artifact hoặc compatibility tests; không copy records thủ công giữa modules mà không kiểm compatibility.
 
-Ví dụ: subtotal 100.00, discounts 0, redeemed 20.00, shipping 10.00 → grand total 90.00, qualifying 80.00, không phải 70. Với `moneyPerPoint=1.00`, multiplier 1.25 → 100 earned points.
-
-Money API dùng decimal string:
-
-```json
-{"amount":"1000000.00","currency":"EUR"}
-```
-
-Frontend chỉ format/display; không dùng JavaScript `number` để quyết định total. Stripe minor units phải theo currency metadata, không mặc định mọi currency có hai decimal places.
-
-## 5. Main Server logical schema
-
-### 5.1 Order, payment, idempotency và audit
-
-| Table | Cột/constraint chính |
-|---|---|
-| `checkout_requests` | `id,user_id,idempotency_key,request_hash,order_id,response_snapshot JSON,status,lease_until,timestamps`; unique `(user_id,idempotency_key)` |
-| `payment_initiation_requests` | `id,user_id,payment_id,idempotency_key,request_hash,response_snapshot JSON,status,timestamps`; unique `(user_id,idempotency_key)`, unique `payment_id`; request hash là HMAC/canonical digest để không lưu PaymentMethod ID rõ |
-| `orders` | current fields + `subtotal,product_discount,order_discount,coupon_discount,redeemed_point_value,shipping_fee,total_amount,currency,status,reservation_expires_at,payment_deadline,version` |
-| `order_items` | `order_id,product_id,name,unit_price,quantity,discount allocations,redeemed allocation,line_total,qualifying_amount,is_gift`; immutable snapshot |
-| `payments` | `order_id,amount,currency,status,external_payment_id,version,timestamps`; unique active payment/order policy |
-| `refunds` | `id,order_id,payment_id,amount,currency,reason,requested_by,status,request_idempotency_key,external_refund_id,version,timestamps`; unique request key |
-| `audit_events` | aggregate/action/before/after/reason/correlation/actor/timestamp; không chứa PaymentMethod ID |
-| `operations_alerts` | aggregate/type/severity/status/details-redacted/idempotency_key/timestamps; unique key |
-
-Mọi enum do service set; request DTO không có status.
-
-### 5.2 Inventory
-
-`products` thêm `price DECIMAL(19,2), on_hand_quantity, reserved_quantity, active, version`; `available = on_hand - reserved` là derived, không lưu. Checks nonnegative và reserved ≤ on-hand.
-
-`inventory_reservations(id,product_id,order_id,quantity,status RESERVED|COMMITTED|RELEASED|EXPIRED,expires_at,idempotency_key,version,timestamps)`; unique `(order_id,product_id)` và key, quantity > 0.
-
-Checkout lock products theo ID, tăng reserved. Payment success `RESERVED -> COMMITTED`, giảm on-hand và reserved. Checkout expiry/failure release giảm reserved, không đổi on-hand. Full financial refund **không tự restock**. Admin restock dùng:
-
-`inventory_adjustments(id,product_id,order_id,adjustment_type,quantity,reason,idempotency_key,created_by,created_at)`; unique key. Hàng vật lý chỉ tăng on-hand sau nhận/kiểm tra hoặc admin quyết định; sản phẩm số không restock. Return-merchandise workflow đầy đủ deferred.
-
-### 5.3 Point reservation, immutable allocations và ledger
-
-| Table | Cột/constraint chính |
-|---|---|
-| `loyalty_accounts` | user unique, available/reserved/lifetime points, tier, `loyalty_debt`, version |
-| `point_lots` | account/source order/original/remaining/expires/type/version; remaining không âm |
-| `point_reservations` | account/order/total points/value/currency/status `PENDING_PAYMENT|CONSUMED|RELEASED|EXPIRED`, expires/key/version; unique order/key |
-| `point_reservation_allocations` | reservation, point lot, reserved points, created; unique `(reservation_id,point_lot_id)`, positive; **immutable, không có status** |
-| `loyalty_transactions` | account/order/payment/reservation/lot/type/signed points/value/currency/balance after/idempotency key/created; unique key |
-
-Checkout lock account và non-expired lots ordered `(expires_at,id) FOR UPDATE`, trừ remaining, giảm available, tăng reserved; tạo reservation/allocations và một tổng ledger `RESERVED` trong cùng order transaction.
-
-Ledger rules:
-
-- Một dòng tổng, `point_lot_id=NULL`: `RESERVED`, `REDEEMED`, `RELEASED`, `REDEEMED_REFUNDED`; key `loyalty:<operation>:<reservationId>` (refund return thêm refund business ID nếu một reservation có thể có nhiều reversals).
-- Một dòng mỗi lot: `EARNED`, `EARNED_REVERSED`, `EXPIRED`, `ADJUSTMENT`; key `loyalty:<operation>:<lotId>:<businessOperationId>`. Không dùng một key cho nhiều lot.
-- `DEBT_CREATED/DEBT_REPAID` key theo debt operation/account; không giả làm lot transaction.
-
-Success conditional reservation `PENDING_PAYMENT -> CONSUMED`, ghi tổng `REDEEMED`, sau đó earned lot/transactions:
+### 12.2 Event catalog mới
 
 ```text
-reservedPoints  = reservedPoints - redeemedPoints
-availablePoints = availablePoints + earnedPointsAfterDebt
-lifetimePoints  = lifetimePoints + grossEarnedPoints
+PartnerApplicationSubmittedEvent
+PartnerApprovedEvent
+PartnerRejectedEvent
+PartnerSuspendedEvent
+
+PartnerOfferSubmittedEvent
+PartnerOfferApprovedEvent
+PartnerOfferRejectedEvent
+PartnerOfferSuspendedEvent
+
+PartnerOrderCreatedEvent
+PartnerOrderAcceptedEvent
+PartnerOrderRejectedEvent
+PartnerOrderShippedEvent
+PartnerOrderDeliveredEvent
+
+SettlementCalculatedEvent
+SettlementApprovedEvent
+SettlementPaidEvent
 ```
 
-Release đọc immutable allocations. Lot còn hạn: cộng lại đúng `reserved_points`, tăng available. Lot hết hạn: không trả available/remaining, ghi `EXPIRED` theo lot. Giảm toàn bộ reserved; reservation conditional sang `RELEASED` (còn ít nhất một point được trả) hoặc `EXPIRED` (không point nào được trả; mixed case vẫn `RELEASED` và ledger thể hiện phần expired). Không bao giờ “ghi status cho allocation”.
+Event chỉ chứa IDs, snapshot tối thiểu cần thiết và redacted contact; không chứa tax document, bank proof, password, token, PaymentMethod ID ngoài payment-specific protected contract.
 
-### 5.4 Promotion
+### 12.3 Notification target
 
-MVP chỉ root groups; conditions trong group là AND, groups là OR. Nested/cycle deferred.
+- Admin: application/submission mới, reconciliation/settlement exception.
+- Partner: approved/rejected/suspended, offer decision, order mới, SLA, settlement approved/paid.
+- Customer: fulfillment changes qua aggregate/customer notification policy.
 
-`promotions` có code/type/priority/stackable/start/end/status/max discount/currency/`usage_limit`/`remaining_usage nullable`/per-customer limit/version. Reward có target product/category, percent/fixed/cap/currency/reward quantity/fixed combo/max applications per order.
+Trước khi mở rộng partner notification, hoàn thiện Notification V2 thành receive transaction → durable send operation → worker send ngoài transaction → terminal/UNKNOWN/retry/dead state. Email template phải escape user content; sender phải propagate failure. Không tuyên bố exactly-once email.
 
-`promotion_reservations(promotion_id,user_id,order_id,applications,discount_amount,status RESERVED|CONSUMED|RELEASED|EXPIRED,expires_at,idempotency_key,version)` unique promotion+order/key. `promotion_usage_counters(promotion_id,user_id,reserved_orders,consumed_orders,version)` unique pair.
+## 13. AI hỗ trợ, không nằm trong critical transaction
 
-MVP semantics đề xuất, chờ owner xác nhận: `usage_limit` và `per_customer_limit` đếm **order**, còn `applications` là số reward repeats trong một order và bị cap bởi `max_applications_per_order`. Checkout mỗi promotion/order reserve đúng một global/per-user slot dù applications > 1. Finite remaining decrement 1 atomically; NULL là unlimited và không decrement. Release trả đúng một slot; success chuyển reserved order counter sang consumed.
+### 13.1 Use cases
 
-### 5.5 Spend ledger, outbox/inbox
+1. **Phân loại sản phẩm:** input tên/mô tả/ảnh/attributes; output suggested category, missing attributes, keywords, confidence.
+2. **Duplicate detection:** text/SKU/brand/attributes + image embedding; trả candidate IDs, similarity và explanation.
+3. **Content moderation:** spam, inappropriate image, incomplete description, anomalous price, possible policy violation.
+4. **Partner risk score:** cancellation, late delivery, return, complaints, violations, anomalous price changes; output score, reasons, model version.
 
-`spend_ledger` dùng signed amount: `QUALIFIED_SPEND` dương, `REFUND` âm, `ADJUSTMENT` hai dấu; có currency, external reference, unique business key. Rolling total là `SUM(amount)` trong window, không trừ refund lần hai.
+### 13.2 Guardrails và fallback
 
-Main `outbox_events`: `id,event_id,aggregate_type,aggregate_id,event_type,event_version,topic,event_key,payload JSON,idempotency_key,status PENDING|PROCESSING|RETRY|PUBLISHED|DEAD_LETTER,retry_count,max_retries,next_retry_at,claimed_by,claimed_at,created_at,published_at,last_error`; unique event ID và business key.
+- AI chạy async sau khi draft/submission đã durable; timeout không rollback checkout/order/payment/settlement.
+- Confidence dưới threshold → `NEEDS_HUMAN_REVIEW`, không auto reject/delete/suspend.
+- Provider lỗi → queue retry bounded; sau threshold bỏ AI result và tiếp tục manual review.
+- Lưu model/provider/version, prompt policy version, input references, output, confidence và reviewer decision; không gửi PII/tax/bank documents nếu không có approved data-processing policy.
+- AI score chỉ là signal. Admin phải quyết định moderation/suspension; mọi quyết định có reason/audit.
+- MVP có thể chỉ cung cấp category suggestion và duplicate warning; risk scoring để Phase 5 khi dữ liệu đủ chất lượng.
 
-Main `processed_events`: `id,event_id,consumer_name,event_type,correlation_id,aggregate_id,processed_at`; unique `(consumer_name,event_id)`. Business processing và insert marker cùng transaction.
+## 14. Migration additive và cutover
 
-## 6. Payment Service logical schema và operations
+Không sửa V1–V6 Main, V1–V2 Payment/Notification. Rollback theo hướng roll-forward bằng migration sửa lỗi mới và feature flag; không down-migrate destructive trên production.
 
-`payment_operations(id,main_payment_id,order_id,amount,currency,payment_method_ref,request_idempotency_key,stripe_idempotency_key,stripe_payment_intent_id,status RECEIVED|PROCESSING|SUCCEEDED|FAILED|UNKNOWN,failure_code,failure_message,claimed_by,claimed_at,version,timestamps)`; unique main payment/request key/Stripe key/external ID.
+### 14.1 Trình tự
 
-`refund_operations(id,refund_id,main_payment_id,order_id,amount,currency,external_payment_id,stripe_refund_id,request_idempotency_key,stripe_idempotency_key,status RECEIVED|PROCESSING|SUCCEEDED|FAILED|UNKNOWN,failure_code,failure_message,claimed_by,claimed_at,created_at,updated_at,version)`; unique refund ID/request key/Stripe key and unique nullable Stripe refund ID.
+1. Data audit: duplicate username/email/tax candidate, seller không hợp lệ, products null owner, orphan orders/items, stock invariant.
+2. Tạo `partners`, `partner_members`, `partner_documents`, audit tables và constraints/indexes additive.
+3. Backfill mỗi legacy SELLER hợp lệ thành một Partner `APPROVED` compatibility record và membership `OWNER`.
+4. Tạo target catalog/offer/submission tables; tạo một offer cho mỗi legacy Product, lưu `legacy_product_id` mapping unique.
+5. Dual-read: public/product/cart response thêm offer mapping nhưng giữ legacy fields. Dual-write có thời hạn cho price/stock nếu cả V1/V2 còn phục vụ.
+6. Chuyển cart item sang `offer_id` nullable trước, backfill, rồi code yêu cầu offer cho cart mới; không tự chọn lại offer khi mapping ambiguity.
+7. Mở rộng order items snapshot và inventory reservation với offer/partner; tạo PartnerOrder cho order mới.
+8. Backfill order lịch sử chỉ khi lineage đủ chắc chắn. Nếu product→seller tại thời điểm lịch sử không chứng minh được, đánh dấu legacy/unassigned và không giả lập settlement payable.
+9. Tạo commission rules, settlement/lines, indexes/unique/FK/check constraints.
+10. Cutover read/write, disable V1 endpoints/listeners, theo dõi reconciliation.
+11. Chỉ sau ổn định mới `NOT NULL` target columns và ngừng/loại legacy `Product.user_id`, product price/stock, `SELLER` role.
 
-Payment Service có local `processed_events` và đầy đủ `outbox_events` như Main. V1 `payments` được additive backfill/cutover thành một source of truth rõ ràng; không để `payments` và `payment_operations` cùng authoritative.
+### 14.2 Backfill rules
 
-Receive transaction insert inbox + create/find operation rồi commit/ack. Worker claim bằng lease, gọi Stripe **ngoài** DB transaction với stable Stripe idempotency key, sau đó transaction lưu result và terminal result outbox. Crash/`UNKNOWN` được query/reconcile, không blind retry charge/refund.
+- Seller hợp lệ: active user có role SELLER và ít nhất một product → partner code deterministic `LEGACY-{userId}`, tax code nullable/needs verification, status compatibility được policy xác nhận. Khuyến nghị `APPROVED` nhưng flag `legacyVerificationRequired` để không làm ngừng hệ thống.
+- SELLER không product: vẫn có thể tạo draft/legacy partner nếu business muốn giữ quyền; nếu không, chỉ tạo membership khi user nộp application.
+- Product không seller: đưa vào quarantine report; admin map partner/platform-owned hoặc archive. Không gán ngẫu nhiên.
+- Username trùng: DB hiện chưa unique. Dùng immutable user ID làm key; chặn cutover constraint cho đến khi merge/rename theo manual case list.
+- Một seller có nhiều account: không tự merge theo email/name. Owner quyết định cùng partner và tạo nhiều memberships sau xác minh.
+- Một user thuộc nhiều partner: backfill một partner per legacy seller user trước; cho phép admin merge partner records bằng controlled tool sau, giữ redirect/mapping audit.
+- Legacy orders: snapshot partner từ `order_items.product_id -> legacy_product_id -> offer -> partner` chỉ nếu mapping immutable tại cutover. Order V1 không có order_items không đủ dữ liệu thì không backfill financial settlement.
 
-## 7. Notification Service Inbox và send operation
+### 14.3 Roll-forward safety
 
-Notification MVP thêm:
+- Mỗi migration nhỏ, resumable, có pre/post verification query và reconciliation counts.
+- Backfill theo batches với mapping table/checkpoint; idempotent `INSERT ... SELECT` bằng unique business keys.
+- Feature flags: partner read, offer cart, partner split, commission snapshot, settlement calculation.
+- Nếu lỗi, tắt feature mới, giữ bảng/cột additive, deploy code sửa và migration Vnext; không sửa checksum migration đã chạy.
 
-- `processed_events(id,event_id,consumer_name,processed_at)`, unique `(consumer_name,event_id)`.
-- Mở rộng `notifications` hoặc tạo `send_operations`: `event_id,business_idempotency_key,contact,notification_type,payload,status RECEIVED|SENDING|SENT|FAILED|UNKNOWN|DEAD,attempt_count,next_retry_at,last_error,sent_at,claimed_by,claimed_at,timestamps`; unique event ID và business key.
+## 15. Kế hoạch kiểm thử
 
-Listener transaction insert processed marker và durable send operation; commit rồi Kafka ack. Duplicate event/business key không tạo lần gửi thứ hai. Worker claim operation, gửi SMTP ngoài transaction, rồi mark result. Retry bounded/backoff; DEAD alert. SMTP timeout sau server chấp nhận có thể là `UNKNOWN`: không thể bảo đảm không gửi trùng nếu retry, nên mặc định chuyển review/manual retry thay vì tự gửi lại. Không tuyên bố exactly-once email.
+### 15.1 Unit tests
 
-Notification Service không phát critical event trong MVP nên không bắt buộc outbox. Listener/service không catch-and-swallow lỗi trước durable commit. Contact/payload/log được redact theo privacy policy.
+- Partner/offer/PartnerOrder/settlement state transitions và invalid transitions.
+- Commission precedence, time range, rate/fixed fee, rounding và immutable snapshot.
+- Settlement formula/funding/refund/carry-forward/manual adjustment.
+- Ownership, membership role, partner status, last-owner invariant.
+- OrderItem snapshot đầy đủ partner/offer/commission/payable.
+- AI timeout/error/low-confidence/manual fallback.
 
-## 8. Event contracts V2
+### 15.2 Integration tests
 
-Envelope chung: `eventId` UUID (một message), `eventType`, `eventVersion=2`, `occurredAt`, `correlationId` (toàn flow), `aggregateId`, `producer`, `idempotencyKey` (business operation). Các trường không dùng lẫn nhau.
+- Application draft/submit/duplicate tax/approve/reject/suspend/restore.
+- Approval tạo OWNER membership idempotently; concurrent admins.
+- Offer create/submit/moderate/suspend/archive và public sellable predicate.
+- Multi-partner checkout tạo một Order, N PartnerOrder, đúng snapshots và offer reservations.
+- Payment success kích hoạt fulfillment; payment failure/expiry release đúng offer inventory.
+- Full refund tạo đúng settlement reversal; partial refund khi được bật.
+- Duplicate event/event business key; outbox retry/dead-letter; inbox cùng transaction.
+- Notification durable receive/send worker và SMTP ambiguity.
+- Migration test trên MySQL với representative legacy anomalies.
 
-| Event/topic/key | Payload nghiệp vụ |
-|---|---|
-| `PaymentRequestedEventV2` / `payment.requested.v2` / key `paymentId` | paymentId, orderId, amount string, currency, PaymentMethod ID |
-| `PaymentResultEventV2` / `payment.result.v2` / key `paymentId` | paymentId, orderId, amount, currency, externalPaymentId/Stripe PaymentIntent ID, status `SUCCEEDED|FAILED`, failureCode/message |
-| `PaymentReviewRequiredEventV2` / `payment.review.required.v2` / key `paymentId` | payment/order/external IDs, reason code, redacted detail, observedAt |
-| `RefundRequestedEventV2` / `payment.refund.requested.v2` / key `paymentId` | refundId, orderId, paymentId, externalPaymentId, amount, currency, reason, requestedBy, requestIdempotencyKey |
-| `RefundResultEventV2` / `payment.refund.result.v2` / key `paymentId` | refundId, orderId, paymentId, externalPaymentId, stripeRefundId, amount, currency, status `SUCCEEDED|FAILED`, failureCode/message |
-| `NotificationRequestedEventV2` / `notification.requested.v2` / key aggregate ID | envelope + notification type, contact type/contact, minimal payload; business key unique per notification purpose |
+### 15.3 Security tests
 
-Key luôn là payment ID cho payment/refund ordering. `refundId` vẫn là aggregate ID của refund event. Payment Service **chỉ phát terminal** `PaymentResultEventV2`/`RefundResultEventV2`. `UNKNOWN` được giữ và reconcile trong Payment Service; nếu cần Main visibility/alert, phát riêng `PaymentReviewRequiredEventV2`, không giả UNKNOWN là FAILED.
+- Seller A không sửa/xóa product Seller B ngay trong compatibility phase.
+- Partner A không list/get/transition PartnerOrder B và không đọc Settlement/Document B.
+- Finance staff không sửa offer; Product staff không approve/mark-paid settlement.
+- Client không tự đặt status, partnerId, commission, partnerPayable, approval actor hoặc stock counters.
+- IDOR fuzz cho mọi resource ID; mass assignment với unknown/protected fields bị reject.
+- Suspended partner bị chặn partner commands nhưng user vẫn dùng customer flow và partner khác.
+- Public register gửi `ADMIN`/`PARTNER` bị reject/ignored; only trusted provisioning creates ADMIN.
+- Upload type/size/path/checksum access; signed URL tenant scope.
 
-Main khi nhận review/mismatch: Payment `-> REVIEW`, Order `-> PAYMENT_REVIEW`, không consume/release reservations, không earn/spend/commit inventory; ghi audit và operations alert. Refund UNKNOWN giữ `REFUND_PENDING`, không reverse loyalty/spend/inventory.
+### 15.4 Concurrency và reliability tests
 
-Cancel protocol events không thuộc MVP vì customer không được cancel sau initiation. Do đó không tạo `PaymentCancelRequestedEventV2`/`PaymentCancelResultEventV2` hoặc acceptance criteria tương ứng.
+- Hai checkout mua offer cuối: chỉ một reservation thành công.
+- Hai admin approve cùng Partner/Offer: một transition/event/membership.
+- Hai workers calculate cùng settlement period: một active settlement/line set.
+- Refund và settlement calculation đồng thời: deterministic lock order/carry-forward, không double payable.
+- Partner accept và admin cancel đồng thời: một state thắng, side effects/event đúng một lần.
+- Outbox publish thành công nhưng mark DB fail; duplicate Kafka được inbox bỏ qua.
+- Worker crash sau external Stripe/SMTP call; stable idempotency/reconciliation behavior.
 
-## 9. State machines
+### 15.5 Test gates
 
-### 9.1 Main Order và Payment
+- Phase 0: toàn bộ backend reactor và UI unit tests xanh; không chấp nhận 15 ProductController failures hiện tại.
+- Mỗi migration chạy trên MySQL 8, không chỉ H2.
+- Contract tests Event V2 giữa producer/consumer.
+- Performance: multi-partner checkout lock/query count, tenant list pagination/index, settlement batch volume.
 
-Order statuses MVP: `CREATED, PAYMENT_PENDING, PAID, PAYMENT_FAILED, PAYMENT_REVIEW, CANCELLED, EXPIRED, REFUND_PENDING, REFUNDED, REFUND_FAILED`. `CANCEL_REQUESTED` không cần vì post-initiation cancel deferred.
+## 16. Lộ trình triển khai
 
-Payment statuses MVP: `AWAITING_PAYMENT_METHOD, PENDING, SUCCEEDED, FAILED, REVIEW, CANCELLED, REFUND_PENDING, REFUNDED, REFUND_FAILED, EXPIRED`. `CANCELLED` chỉ dùng cho cancel trước initiation. `PROCESSING` là Payment Service operation state; Main không cần phản ánh từng worker lease. `CANCEL_REQUESTED` và cancel PaymentIntent sau initiation deferred.
+### Phase 0 — Đồng bộ và ổn định hiện trạng
 
-| Order / Payment transition | Actor và precondition | Atomic side effect | Terminal? / version guard |
+- Chốt Product–Partner model B và owner decisions blocking.
+- Sửa P0/P1 ownership/security/JPA/refund/notification defects.
+- Đưa tests về xanh; xác lập baseline metrics.
+- Cutover checkout/payment/refund V2; feature-disable/remove V1 command paths an toàn.
+- Chuẩn hóa event envelope/naming và Notification durable send.
+
+Exit: không còn client-authoritative order/payment path; Seller A/B security tests xanh; migrations V1–V6 validate; V2 reconciliation/alerts vận hành được.
+
+### Phase 1 — Partner foundation
+
+- Partner, PartnerMember, PartnerDocument metadata, application/review/suspend/restore/terminate.
+- Tenant authorization policy và audit.
+- Backfill SELLER compatibility và frontend application/admin review cơ bản.
+
+### Phase 2 — Partner product management
+
+- Catalog Product + PartnerOffer, submission/moderation, inventory theo offer.
+- Cart chọn offer, public sellable projection, soft archive.
+- Partner product dashboard và admin moderation dashboard.
+
+### Phase 3 — Partner orders
+
+- PartnerOrder split trong checkout, expanded immutable OrderItem snapshot.
+- Fulfillment state machine, aggregate order projection, partner order dashboard.
+- Outbox events và durable notifications.
+
+### Phase 4 — Commission và settlement
+
+- CommissionRule engine/snapshot.
+- Settlement/SettlementLine calculation, review, approve, manual mark-paid.
+- Refund/cancel/failed delivery adjustments và finance reports.
+
+### Phase 5 — AI
+
+- Category suggestion, duplicate detection, moderation assistance.
+- Risk scoring sau khi đủ data/SLA labels.
+- Human review, model monitoring, fallback và audit.
+
+## 17. Acceptance criteria
+
+### MVP business
+
+- Admin có thể review/approve/reject/suspend/restore partner với audit.
+- Approved partner quản lý nhiều members và role-scope đúng; user có thể thuộc nhiều partner nếu owner xác nhận đề xuất.
+- Partner tạo/submit offer; admin moderate; chỉ sellable offer được public/checkout.
+- Một checkout chứa offer của ít nhất hai partner tạo đúng một Order và hai PartnerOrder.
+- Mỗi OrderItem giữ partner/offer/price/commission/payable snapshot bất biến.
+- Inventory reserve/commit/release đúng offer dưới concurrency.
+- Partner chỉ thấy và transition order của mình.
+- Commission rule precedence deterministic và lịch sử không đổi khi rule mới được cấu hình.
+- Settlement có traceable lines; admin calculate/review/approve/mark-paid thủ công; partner read-only.
+- Full refund tạo financial/settlement adjustment đúng và không auto-restock.
+
+### Reliability/security
+
+- Critical events dùng transactional outbox/inbox; duplicate không tạo duplicate state/line/notification operation.
+- Command quan trọng idempotent và conflict payload được phát hiện.
+- Không public self-register ADMIN; không V1 client-authoritative order/payment.
+- IDOR/mass-assignment/tenant tests xanh.
+- Suspended partner bị chặn đúng scope, không khóa toàn bộ user.
+- Backend/UI/migration/contract test gates xanh; metrics/alerts cho dead-letter, reconciliation, settlement mismatch.
+
+### AI
+
+- AI outage không chặn transaction.
+- Low-confidence/manual fallback hoạt động; không auto suspend/reject/delete trong MVP.
+- Output lưu model version/confidence/explanation và reviewer decision.
+
+## 18. File-level implementation plan
+
+Đây là vị trí dự kiến; tên package có thể tinh chỉnh nhưng phải giữ domain boundary.
+
+| Khu vực | Files hiện tại cần sửa | Files/package mới dự kiến |
+|---|---|---|
+| Security/roles | `security/SecurityConfig.java`, `services/AuthServiceImpl.java`, `model/dto/auth/RegisterDTO.java`, `utils/Role.java` | `security/PartnerAuthorizationService`, permission policies, member context resolver |
+| Legacy ownership | `model/User.java`, `model/Product.java`, `services/ProductServiceImpl.java`, `repositories/ProductRepository.java`, `controllers/ProductController.java`, `model/dto/ProductDTO.java` | Compatibility mapper and tenant-scoped queries |
+| Partner foundation | none | `model/partner/{Partner,PartnerMember,PartnerDocument,...}`, DTOs, repositories, services, controllers, state policies |
+| Offer/catalog | `Product`, cart/product DTO/services/controllers | `model/offer/PartnerOffer`, ProductRevision/Submission, repositories/services/controllers/moderation |
+| Checkout/inventory | `CheckoutService.java`, `CheckoutExpiryJob.java`, cart services/DTO | Offer inventory reservation/adjustment service; PartnerOrder creation; OrderItem domain mapping |
+| Orders | `model/Order.java`, `OrderRepository`, `OrderServiceImpl`, order DTO/controller | `PartnerOrder`, repository/service/controller, state machine, aggregate projection |
+| Commission/settlement | none | commission engine/rules; Settlement/Line entities, calculators, repositories, admin/partner controllers |
+| Events | Main/Payment/Notification `kafka/events`, `Outbox*`, `InboxService` | Partner/offer/order/settlement contracts, schema compatibility tests |
+| Refund | `RefundService`, `RefundResultV2Consumer` | Refund allocation and settlement adjustment handlers |
+| Notification | `NotificationEventListener`, `NotificationServiceImpl`, `EmailNotificationSender`, repository/model | Durable send worker/claim repository, partner templates |
+| Frontend | `Main.tsx`, `Header.tsx`, product/cart/order APIs/pages | partner application/dashboard, members, offers, orders, settlements, admin review/moderation/finance routes |
+| Migrations | không sửa existing migrations | Main V7+ additive partner/offer/order/commission/settlement/backfill/index/constraints; Payment/Notification V3+ nếu cần |
+| Tests | current server/payment/notification/UI/IT tests | partner domain/integration/security/concurrency/contract/migration suites |
+
+## 19. Owner decision checklist
+
+- [ ] 1. Xác nhận Product–Partner: đề xuất **nhiều partner cùng bán qua PartnerOffer (B)**.
+- [ ] 2. Một user có thể thuộc nhiều partner? Đề xuất **có**, active context explicit.
+- [ ] 3. Đối tác có nhiều kho trong MVP? Đề xuất **không**; một inventory pool/offer, schema không khóa đường mở rộng.
+- [ ] 4. Ai chịu chi phí promotion: platform, partner hay shared? Cần policy + snapshot funding.
+- [ ] 5. Commission tính trên gross hay net của partner-funded discount/refund/tax/shipping?
+- [ ] 6. Revenue eligible khi shipped, delivered hay hết return window? Đề xuất delivered + configurable hold.
+- [ ] 7. Refund điều chỉnh settlement mở hay carry-forward kỳ sau nếu đã approved/paid?
+- [ ] 8. Partial refund trong MVP? Đề xuất deferred; thiết kế line-level để không chặn tương lai.
+- [ ] 9. Settlement theo tuần hay tháng, timezone/cutoff nào?
+- [ ] 10. Payout thủ công hay tự động? Đề xuất manual mark-paid trong MVP.
+- [ ] 11. Tài liệu/hợp đồng pháp lý nào bắt buộc theo quốc gia/category?
+- [ ] 12. Partner suspended: offers ẩn ngay; đơn đang xử lý cho tiếp tục, admin takeover hay cancel?
+- [ ] 13. Có AI trong MVP không? Đề xuất chỉ category/duplicate suggestion hoặc deferred.
+- [ ] 14. AI chỉ cảnh báo hay auto reject? Đề xuất **chỉ cảnh báo/human decision**.
+- [ ] 15. Retention, encryption, object storage region, access log và deletion policy cho documents/audit/PII?
+- [ ] 16. Partner có được thay đổi price mà không re-review? Threshold/cooldown?
+- [ ] 17. Khi một PartnerOrder reject, cancel toàn Order hay partial fulfillment/refund?
+- [ ] 18. Tax/VAT và shipping share nằm trong partner payable/commission base thế nào?
+- [ ] 19. Legacy SELLER được auto-approved hay phải hoàn tất verification trong grace period?
+- [ ] 20. Một partner có nhiều offer cho cùng Product không?
+
+## 20. Risk register
+
+| Risk | Xác suất/ảnh hưởng | Mitigation | Trigger/owner |
 |---|---|---|---|
-| create `CREATED/AWAITING_PAYMENT_METHOD` | checkout service; reservations complete | snapshots + reservations | no / insert uniques |
-| `CREATED/AWAITING -> PAYMENT_PENDING/PENDING` | owning customer initiate; before checkout TTL | Main payment request outbox | no / both rows conditional+version |
-| `CREATED/AWAITING -> CANCELLED/CANCELLED` | owning customer cancel before initiation | release all reservations; notification optional | yes / order+payment+reservations guarded |
-| `CREATED/AWAITING -> EXPIRED/EXPIRED` | checkout expiry job | release all reservations; no payment request | yes / order+payment+reservations guarded |
-| `PAYMENT_PENDING/PENDING -> PAID/SUCCEEDED` | terminal reconciled result | commit inventory/promo, consume redeem, earn, spend | order paid not final due refund / guard |
-| `PAYMENT_PENDING/PENDING -> PAYMENT_FAILED/FAILED` | reconciled terminal failure | release reservations | terminal payment attempt / guard |
-| pending states `-> PAYMENT_REVIEW/REVIEW` | review event or mismatch | audit/alert; retain reservations | no / guard |
-| `PAID/SUCCEEDED -> REFUND_PENDING/REFUND_PENDING` | authorized full refund request | refund row + refund outbox | no / guard |
-| refund pending `-> REFUNDED/REFUNDED` | reconciled refund success | negative spend, point reversals/returns; **no auto-restock** | yes / guard |
-| refund pending `-> REFUND_FAILED/REFUND_FAILED` | terminal failure | no financial/loyalty reversal | retry/manual state / guard |
-
-Controller không thể set status. Mọi update dùng expected status và `@Version`/conditional affected-row check.
-
-### 9.2 Full refund policy
-
-Main tạo unique refund operation and outbox only from `PAID/SUCCEEDED`. Payment Service receives durably, creates refund operation, calls Stripe outside transaction with stable idempotency key, stores terminal result/outbox. Main reverses only on `SUCCEEDED`.
-
-Earned points reversal first drains remaining source earned lot, then other available lots according to approved policy and creates loyalty debt for shortfall; no lot negative and refund is not blocked. Redeemed points return policy when original lots expired is owner decision. Financial refund never proves physical return: no stock change in handler; admin adjustment is separate audited/idempotent operation.
-
-## 10. Reservation deadlines và race analysis
-
-Hai deadlines độc lập:
-
-- `reservationExpiresAt`: chỉ áp dụng `AWAITING_PAYMENT_METHOD`. Expiry job locks payment/order; if still awaiting, moves to `EXPIRED`, releases inventory/promotion and points according to expiry policy. Không phát payment request.
-- `paymentDeadline`: áp dụng sau `PENDING`. Checkout TTL no longer releases anything. Quá deadline triggers Payment Service reconciliation; terminal failed/not-created releases, success commits, ambiguity produces review and retains reservations.
-
-Race rules:
-
-| Race | Lock/expected-state winner và kết quả |
-|---|---|
-| Initiation đúng lúc checkout expiry | Cả hai lock payment/order theo same order. Initiate thắng: state PENDING nên expiry no-op. Expiry thắng: EXPIRED nên initiate trả 409/expired và không outbox. |
-| Payment success cùng customer cancel | Customer cancel post-initiation không hỗ trợ; success proceeds. Pre-initiation cancel cannot coexist with request because state guard serializes. |
-| Timeout/reconciliation result cùng result consumer | Lock payment/order + expected state/business keys; một transition commits, duplicate/stale result becomes no-op or review on contradiction. |
-| Hai expiry workers | `FOR UPDATE SKIP LOCKED`, lease/conditional state update; chỉ một releases. |
-| Independent point/inventory/promo jobs | Job phải lock parent order/payment first; chỉ expire when `AWAITING_PAYMENT_METHOD`, không tự release pending payment. |
-
-## 11. Transaction matrix đầy đủ
-
-Quy ước mọi event có fresh Event ID; business key nêu riêng. “RB” = exception rollback toàn local transaction; retry uses bounded deadlock/backoff; crash recovery relies on persisted state/lease/outbox.
-
-| # / use case | Service/transaction boundary | Lock/read → write; state/reservation | Event + IDs/keys; rollback, retry, crash recovery |
-|---|---|---|---|
-| 1 Cart Summary preview | Main read-only | DB price/promo/account; no writes/reserve | no event/key; cache fallback; retry read |
-| 2 Checkout | Main single Tx | idempotency, cart/products/promos/account/lots → order/items/payment awaiting + 3 RESERVED types | **no payment event**; key client checkout UUID; RB all; deadlock retry; request lease recovers crash |
-| 3 Duplicate checkout | Main Tx | lock `(user,key)`, compare hash/read snapshot | same returns prior, mismatch 409; concurrent waits; no duplicate order |
-| 4 Checkout reservation expiry | Main batch Tx | skip-locked order/payment awaiting + all reservations → order/payment EXPIRED, reservations RELEASED/EXPIRED | expiry business keys per reservation/order; RB all; lease/state guard recovers |
-| 5 Payment initiation | Main Tx | initiation request, order/payment/reservation headers → pending states + Main outbox | PaymentRequested V2 Event ID; key `payment-init:<paymentId>`; RB all; outbox recovers |
-| 6 Duplicate initiation | Main Tx | lock key/payment operation, compare hash | prior response; mismatch 409; unique payment/business outbox key prevents second event |
-| 7 Payment receive | Payment Tx A | insert processed + payment operation RECEIVED | input Event ID; `payment-request:<paymentId>`; RB means Kafka retry; ack after commit |
-| 8 Execute Stripe payment | Payment claim Tx, external call, result Tx | lease operation → PROCESSING → terminal/UNKNOWN + terminal outbox if known | stable Stripe key; terminal result fresh Event ID; retry query before charge; stale lease recovery |
-| 9 Payment success | Main one Tx | inbox + lock payment/order/reservations/account/lots → paid/succeeded, COMMITTED/CONSUMED, earn/spend | key `payment-result:<paymentId>:SUCCEEDED` plus side-effect keys; notification outbox; RB/retry; duplicate safe |
-| 10 Payment failure | Main one Tx | same → failed; release all reservations/ledger | key `payment-result:<paymentId>:FAILED`; notification outbox; RB/retry guarded |
-| 11 Payment unknown/reconciliation | Payment recovery Tx(s); Main review Tx if alerted | query Stripe; keep UNKNOWN or terminal; Main review retains reservations | Review event fresh ID/key `payment-review:<paymentId>:<reason>`; leases/retry/manual alert |
-| 12 Cancel before initiation | Main one Tx | lock ownership/order/payment awaiting → CANCELLED and release reservations | `cancel-before-init:<orderId>:<requestId>`; optional notification outbox; RB/retry guarded |
-| 13 Cancel after initiation | **Deferred** | API rejects customer cancellation; admin uses reconciliation/refund after result | no cancel events/criteria in MVP |
-| 14 Point reservation timeout | Main batch Tx | lock parent awaiting then account/reservation/allocations/lots → precise release/expire | ledger keys per rules; RB/retry; skip-locked/state guard |
-| 15 Inventory timeout | Main batch Tx | lock parent awaiting/product/reservation → reserved counter--, EXPIRED | `inventory:expire:<reservationId>`; RB/retry/guard |
-| 16 Promotion timeout | Main batch Tx | parent awaiting/promo reservation/counter → restore one order slot | `promotion:expire:<reservationId>`; RB/retry/guard |
-| 17 Point lot expiry | Main batch Tx | unreserved remaining lots/account → remaining 0, available--, per-lot EXPIRED ledger | `loyalty:expired:<lotId>:<jobWindow>`; RB/retry/skip-locked |
-| 18 Full refund request | Main one Tx | idempotency + lock paid order/payment → refund pending + refund row/outbox | RefundRequested Event ID; key `refund-request:<refundId>`; RB/retry/outbox recovery |
-| 19 Execute refund | Payment receive Tx + claim/external/result Tx | inbox/refund op → processing → terminal/UNKNOWN + outbox if known | stable Stripe refund key; terminal Event ID/key `refund-result:<refundId>:<status>`; reconcile before retry |
-| 20 Refund success | Main one Tx | inbox + lock refund/order/payment/account/lots/spend → refunded, negative spend, reverse/return/debt | unique refund side-effect keys + notification outbox; RB/retry; no stock update |
-| 21 Refund failed | Main one Tx | inbox + lock refund/order/payment → REFUND_FAILED | key `refund-result:<refundId>:FAILED`; no reversal; notification/alert outbox; RB/retry |
-| 22 Refund unknown/reconciliation | Payment recovery; Main alert Tx | keep UNKNOWN; query Stripe; Main stays refund pending | review event/key `refund-review:<refundId>:<reason>`; no reversal; lease/manual recovery |
-| 23 Admin inventory restock | Main one Tx | authorize; lock product/order → adjustment + on-hand increase | key client/admin UUID; audit; RB/retry; duplicate adjustment blocked |
-| 24 Main Outbox publish | Main claim Tx + send + result Tx | skip-locked → PROCESSING; ACK → PUBLISHED or retry/dead | preserves Event ID/business key; ACK required; lease; duplicate possible |
-| 25 Payment Outbox publish | Payment same 3 boundaries | same local table/state | same ACK/lease rules; no cross-DB transaction |
-| 26 Notification consume/send | Notification receive Tx then worker external send/result Tx | inbox + send op RECEIVED; lease SENDING → SENT/FAILED/UNKNOWN/DEAD | input Event ID + notification business key; receive RB/Kafka retry; bounded send retry; SMTP ambiguity manual |
-
-## 12. Outbox, inbox và acknowledgements
-
-Per publishing service:
-
-1. Short claim transaction uses eligible PENDING/RETRY rows ordered by ID `FOR UPDATE SKIP LOCKED`, sets PROCESSING/claimed owner/time, commit.
-2. Outside transaction send `topic,event_key,payload`; wait `CompletableFuture` broker ACK with producer `acks=all` and timeout.
-3. Result transaction guarded by row/status/claimer: ACK → PUBLISHED; failure → RETRY/backoff/count; exhausted → database **Outbox DEAD_LETTER state** + alert.
-4. Lease recovery returns stale PROCESSING to RETRY. Crash after ACK before DB update may duplicate.
-
-Consumer inserts `processed_events` and all local durable business writes in one transaction; unique `(consumer_name,event_id)`. Offset ack only after commit; failure escapes listener. Poison messages after configured attempts go to Kafka **Dead Letter Topic (DLT)**, distinct from Outbox DEAD_LETTER state.
-
-Published outbox retention proposed 30 days online + 90-day archive; owner/security/legal confirm. DEAD_LETTER never auto-deleted. Replay creates fresh Event ID, preserves business key and audit link.
-
-## 13. UNKNOWN và reconciliation
-
-UNKNOWN means Stripe outcome cannot be proven, not FAILED. Recovery queries by external ID when present, Stripe idempotency key/request replay semantics, and payment/order/refund metadata. It may become SUCCEEDED/FAILED or remain UNKNOWN. No blind second charge/refund.
-
-Payment Service emits only terminal result events. It may emit `PaymentReviewRequiredEventV2` for visibility. Main review state freezes reservations and disallows earn/spend/inventory commit/release. Operational runbook must set maximum review age, escalation and manual reconciliation; age alone never authorizes release.
-
-## 14. PaymentMethod ID data policy
-
-Baseline bắt buộc:
-
-- Never log it or include in exception, audit, notification, checkout/initiation response snapshot, metrics tags or operations alert.
-- APM/tracing/HTTP body capture redacts field; Kafka/admin Outbox DEAD_LETTER UI masks it.
-- Main outbox/payment operation storage uses platform/database encryption at rest with least-privilege access; backups inherit encryption/access controls.
-- TLS for UI→Main and service/Kafka transport; Kafka topic ACL limits producer/consumer/admin.
-- Payload retention is shortest recovery window; terminal operation cleanup redacts PaymentMethod ID and published payload after owner-approved window. DEAD/UNKNOWN retains only encrypted/masked data until reconciliation then redacts.
-- Secret scanning/log tests enforce no leakage. PaymentMethod ID is not full card data but is treated as sensitive operational data.
-
-Security owner must confirm encryption implementation, key rotation, exact retention, privileged break-glass access and whether Kafka payload-level encryption is required.
-
-## 15. Refund, points và restock
-
-Full refund financial result, point effects and stock are separate. Only terminal refund success creates signed negative spend, reverses earned points and returns redeemed points. Earned points already spent create debt rather than negative lot or rejected refund. Refund UNKNOWN/FAILED makes no reversals.
-
-No automatic restock in refund handler. MVP offers audited admin `inventory_adjustments`; physical return receipt/inspection is outside scope. Owner must define product types eligible for restock, roles/reasons/evidence and whether refund can precede return.
-
-## 16. Promotion reward examples
-
-- Buy 2 get 1: minimum quantity 3, `FREE_ITEM`, reward quantity 1, repeated only up to max applications; free item snapshot is gift.
-- Buy A, 15% off B: condition product A; target product B; percentage 15 and optional cap.
-- Category discount: target category plus percentage/fixed amount/currency/cap.
-- Fixed combo: product/quantity conditions and fixed combo price; repetitions capped.
-
-Applications calculate discount quantity only; under proposed order-based usage semantics they do not consume extra global/customer usage slots.
-
-## 17. Cache policy
-
-Preview may cache promotion definitions `promotion:def:v2:<id>:<version>` TTL 60s and active list `promotion:active:v2:<currency>` TTL 30s; evict on admin mutation. Recommendation TTL proposed 5m. Checkout/initiation never trust cache for price, active/date/limits, stock, point balance/lots, order/payment/reservation state or amount/currency.
-
-## 18. Flyway plan theo module
-
-Không sửa migration đã apply. Version numbers are planned and must be rechecked immediately before implementation.
-
-- Main after V3: money/order/idempotency; order items/inventory; promotion; loyalty/allocation/debt; refund/spend/audit/alerts/adjustments; outbox/inbox; indexes/checks/seeds.
-- Payment after V1: additive payment operation/backfill; refund operations; outbox/inbox; uniqueness/index/retention hardening.
-- Notification after V1: processed events; extend notifications/send operations with unique business key, state/lease/retry indexes.
-
-Roll-forward: backup → additive columns/tables → preflight duplicates/invalid money → chunked backfill → validate counts/checksums → constraints → feature cutover. Failure never edits applied scripts; next migration repairs. Test clean databases and upgrades from Main V3, Payment V1, Notification V1; preserve old price values with explicit rounding exception report.
-
-## 19. V1 → V2 rollout và rollback
-
-1. Backup; apply additive Main/Payment/Notification migrations.
-2. Deploy Payment with V2 consumer while V1 remains during grace.
-3. Deploy Notification V2 inbox/consumer.
-4. Deploy Main V2 paths with producer feature flag OFF.
-5. Stage smoke/end-to-end/concurrency/security tests.
-6. Enable Main V2 producer for canary then ramp; monitor consumer lag, outbox pending/retry/dead, payment/refund rates, duplicates, mismatch/review and notification UNKNOWN.
-7. Stop V1 production; retain V1 consumers for grace/in-flight drain; remove V1 mapping/topics in later release.
-
-No dual production for one business operation: Main selects exactly V1 **or** V2 by deterministic feature flag at operation creation and persists `protocol_version`. Payment Service dual-consumes during grace, but shared business key `payment-request:<mainPaymentId>` and unique main payment/Stripe idempotency keys ensure V1+V2 duplicate cannot charge twice. Notification uses shared purpose business key across protocol versions.
-
-Rollback conditions: elevated double-operation/mismatch/review, sustained lag/outbox dead state, migration/data integrity failure or payment success regression beyond agreed threshold. Response: stop new V2 selection, leave durable V2 consumers/outbox recovery running for already-tagged V2 operations, route new operations to V1 only if backward-compatible and safe, never replay V2 as V1 with a new business key. Database rollback is roll-forward correction; do not drop additive schema until grace/audit complete.
-
-## 20. Testing strategy
-
-Testcontainers MySQL matching production major proves JSON/DECIMAL, constraints, `FOR UPDATE`, `SKIP LOCKED`, migration, multi-worker claims and concurrency. H2 may remain for isolated unit tests only.
-
-Required tests:
-
-- Formula 100/20/10 → qualifying 80; rounding/cap/gift/shipping/multiplier; no double subtraction.
-- Checkout emits no payment request; payment initiation emits it; duplicate initiation produces one outbox row; mismatched key payload 409.
-- Concurrent checkout same key; stock/point/promotion contention; checkout expiry releases exactly once.
-- Initiation vs expiry job; terminal success vs stale timeout; two workers per reservation; UNKNOWN never commits/releases/earns/spends.
-- Immutable multi-lot allocations: valid-lot release, expired-lot ledger key per lot, mixed release, no duplicate ledger.
-- Promotion order-based usage independent from applications and unlimited NULL semantics.
-- Payment receive/execute crashes; stable Stripe key; duplicate V1/V2 input does not double charge; result mismatch goes review.
-- Duplicate full refund request/result; refund UNKNOWN makes no reversals; spent earned points create debt; returned redeemed points follow approved expiry policy.
-- Refund success does not restock; duplicate authorized admin restock changes stock once.
-- Notification duplicate event/business key creates one send operation; deterministic pre-send duplicate does not send twice; SMTP timeout becomes UNKNOWN rather than claimed exactly-once.
-- PaymentMethod ID absent from log, exceptions, response snapshots, audit, notification, APM fixtures and unmasked admin display; ACL/encryption/cleanup config tests.
-- Main/Payment/Notification clean and upgrade migrations; old prices preserved; roll-forward rehearsal.
-
-Build gates after implementation:
-
-```text
-mvn clean verify
-mvn clean verify -pl ecommerce-platform-server -am
-npm ci
-npm run build
-npm test -- --runInBand
-```
-
-## 21. Acceptance criteria theo phase
-
-### Phase 0 — owner/security decisions
-
-Checklist mục D được signed off and configuration values documented. Status can then move to `IMPLEMENTATION_READY`; no code starts before required decisions.
-
-### Phase 1 — Main transaction foundation
-
-- Checkout/initiation split exactly as API contracts; checkout has no payment event.
-- Backend money/pricing authoritative; idempotency and all reservations atomic/concurrency-tested.
-- Checkout deadline releases only awaiting payments; initiation/expiry race passes.
-
-### Phase 2 — payment/refund reliability
-
-- Main and Payment local inbox/outbox/operations, ACK/lease/retry/reconciliation complete.
-- V2 payment and full refund event contracts/reconciliation pass, including UNKNOWN/review and duplicates.
-- No post-initiation customer cancel protocol or criteria.
-
-### Phase 3 — loyalty/refund/notification/security
-
-- Ledger granularity/keys, debt, signed spend and owner-approved point expiry/return policies pass.
-- Financial refund does not auto-restock; admin adjustment audited/idempotent.
-- Notification durable inbox/send operation handles duplicate/UNKNOWN; PaymentMethod baseline enforced.
-
-### Phase 4 — rollout
-
-- Additive migrations and staging smoke pass; deterministic V1/V2 selection cannot double charge.
-- Monitoring/alerts/runbooks/rollback triggers validated; V1 grace/drain completed before removal.
-
-## 22. File list theo package thực tế
-
-Tên mới dưới đây là planned, không phải class đang tồn tại.
-
-Main, `ecommerce-platform-server/src/main/java/com/yashmerino/ecommerce/`:
-
-- Sửa `model/{Product,CartItem,Order,Payment}.java`, DTOs, `services/{OrderServiceImpl,PaymentServiceImpl}.java`, interfaces, `controllers/{OrderController,PaymentController}.java`, `kafka/PaymentEventListener.java`, current producers during cutover, `utils/{OrderStatus,PaymentStatus}.java`.
-- Tạo entity/repository/service/controller/DTO cho checkout request, payment initiation request, order item, inventory reservation/adjustment, promotion reservation/counter/rules, loyalty account/lot/reservation/allocation/transaction/debt, spend/refund/audit/alerts, outbox/processed event; expiry/reconciliation/outbox jobs; V2 event records under `kafka/events/`.
-- New migrations under `ecommerce-platform-server/src/main/resources/db/migration/`; mirror tests under `src/test/java/`.
-
-Payment, `ecommerce-platform-payment-service/src/main/java/com/yashmerino/ecommerce/`:
-
-- Sửa `model/Payment.java`, `service/impl/{PaymentServiceImpl,StripePaymentServiceImpl}.java`, `kafka/{PaymentEventListener,PaymentResultProducer}.java`, event records/status.
-- Tạo payment/refund operation, outbox/processed event models/repos/services, workers/recovery/publishers and V2 events. Migrations under module resources.
-
-Notification, `ecommerce-platform-notification-service/src/main/java/com/yashmerino/ecommerce/`:
-
-- Sửa `model/Notification.java`, `service/impl/NotificationServiceImpl.java`, `EmailNotificationSender.java`, `kafka/NotificationEventListener.java`, V2 event/status.
-- Tạo processed-event repository/model and send-operation worker/recovery. Migration after Notification V1.
-
-UI:
-
-- Sửa `src/app/api/PaymentRequest.ts`, order API/types, `src/app/components/pages/cart/CartContainer.tsx`, `src/app/components/pages/orders/MyOrdersPage.tsx`; add distinct checkout/initiate calls and decimal-string types. Continue `createPaymentMethod`; no `confirmCardPayment` in MVP.
-
-## 23. Owner decision checklist
-
-Decisions marked “proposed” are not silently treated as approved.
-
-## A. Dữ kiện đã xác minh từ repository
-
-- Current endpoints, packages, entities/events/statuses/migrations and Stripe/UI flow are listed in section 2 from local source.
-- Notification V1 has `notifications`, direct listener/service send and no inbox/business idempotency.
-- Main listener and Notification listener catch exceptions; current direct Kafka sends do not establish DB/Kafka atomicity.
-
-## B. Suy luận thiết kế
-
-- Split checkout/payment initiation follows when PaymentMethod ID becomes available.
-- Choose server-confirm Stripe flow as minimum safe MVP delta; Payment Service operation row is external-call recovery boundary.
-- Choose no customer cancel after initiation to avoid adding a cancel protocol; admin resolves through reconciliation/refund.
-- Include Notification Inbox/send operation because end-to-end duplicate-safe durable acceptance otherwise cannot be claimed.
-- Separate financial refund from inventory restock.
-
-## C. Quyết định nghiệp vụ đã chốt trong kế hoạch
-
-- Checkout does not emit payment request; initiation does.
-- Full refund is MVP; partial refund is not.
-- Customer can directly cancel only `CREATED/AWAITING_PAYMENT_METHOD`; post-initiation customer cancel is rejected/deferred.
-- Payment/Refund Service publishes terminal result only; uncertainty uses local UNKNOWN and optional review event.
-- Point allocations are immutable; reservation is source of state; ledger granularity/keys follow section 5.3.
-- Notification Inbox/send operation is MVP; email exactly-once is not claimed.
-- Refund success does not automatically restock; stock adjustment is separate admin operation.
-
-## D. Quyết định đang chờ chủ dự án
-
-1. Settlement currency (EUR/VND), point value/`moneyPerPoint`, currency minor-unit support and future multi-currency tier rule.
-2. Money `HALF_UP` and final earned-point `DOWN` rounding policy.
-3. Exact checkout reservation TTL, payment deadline, Payment/Refund UNKNOWN escalation/recovery window.
-4. Points expiring while reserved: no return after expiry versus grace extension; mixed reservation status semantics approval.
-5. Redeemed points returned on full refund when original lot expired: no credit, original expiry, or new grace lot/duration.
-6. Loyalty debt allowed and future earned points automatically repay debt; whether `lifetime_points` is gross historical earned or net of reversals.
-7. Promotion semantics: global/per-customer limit counts orders; max applications counts reward repeats; root groups OR/groups conditions AND.
-8. Who may request full refund, valid reasons/time window and whether refund may precede physical return.
-9. Admin restock roles/evidence/reason policy and product types eligible for restock.
-10. Security owner: at-rest/payload encryption mechanism, key rotation, PaymentMethod retention/redaction window, Kafka ACL/TLS and privileged access.
-11. Outbox/audit/archive retention, retry limits/backoff, Kafka DLT and Outbox DEAD_LETTER operational ownership.
-12. V2 canary thresholds, grace period, rollback alert thresholds and review/manual reconciliation SLA.
-
-## E. Deferred khỏi MVP
-
-- Partial refund/proration; customer cancel protocol after initiation.
-- PaymentIntent client secret, `confirmCardPayment`, SCA completion and signed webhook.
-- Nested promotion conditions; multi-currency conversion/tax/split capture.
-- Full returns/RMA workflow; automatic restock.
-
-## F. Rủi ro còn lại
-
-- Stripe/SMTP ambiguity requires reconciliation/manual handling and can never be solved by a local transaction alone.
-- DOUBLE→DECIMAL may expose already-lost precision; migration needs exception report/approval.
-- Reservation contention/deadlock needs consistent lock order: parent order/payment, product IDs, promotion IDs, loyalty account, point lot IDs; bounded retry.
-- Long review can hold scarce inventory/promotion/points; owner must set operational SLA without unsafe time-only release.
-- V1/V2 overlap is safe only if shared business/Stripe keys and persisted protocol selection are implemented exactly.
-
-## G. Điều kiện rollback/cutover
-
-Cutover requires migration validation, V2 staging smoke/concurrency/security tests, dashboards/alerts/runbooks and owner decision sign-off. Roll back new traffic selection on thresholds in section 19, but continue processing already-durable V2 operations. Never rollback schema destructively or replay with a new business key.
-
-## H. Implementation readiness verdict
-
-Checkout/initiation contradiction, refund protocol/schema, reservation exact release, service reliability scope and rollout design are resolved at design level. Required financial/customer/security/operational decisions in section D are not yet confirmed.
-
-> **Status: READY_FOR_OWNER_DECISIONS**
+| Sai lineage khi backfill seller/product/order | Cao/Cao | Mapping table, quarantine, không settlement order không chứng minh được | Reconciliation mismatch; Data owner |
+| Double reservation/oversell khi chuyển stock sang offer | TB/Cao | Lock order, conditional update, version/check constraints, concurrency tests | Negative/over-reserved metric; Inventory owner |
+| Double charge/refund do V1/V2 coexistence | TB/Rất cao | Feature-disable V1, stable keys, inbox/outbox, reconciliation | Duplicate external IDs; Payment owner |
+| Cross-tenant IDOR | Cao/Rất cao | Central policy + tenant-scoped query + security tests | Forbidden access alert; Security owner |
+| Commission/discount policy mơ hồ | Cao/Cao | Owner decisions, immutable funding/rule snapshot, golden examples | Settlement disputes; Finance/Product |
+| Refund sau settlement paid | Cao/Cao | Carry-forward reversal lines; no history rewrite | Negative payable; Finance owner |
+| Notification false success/duplicate | Cao/TB | Durable send worker, propagate errors, UNKNOWN/manual retry | SMTP timeout; Notification owner |
+| Partner suspension làm kẹt orders | TB/Cao | Explicit policy/admin takeover, state-specific authorization | Open orders at suspend; Operations |
+| Marketplace B migration complexity | Cao/TB | 1 legacy product → 1 catalog + 1 offer; phased cart/order cutover | Unmapped cart/order lines; Platform owner |
+| AI false positive/bias | TB/TB | Advisory only, confidence/explanation, human review/monitoring | Override/complaint rate; AI/Product |
+| Documents/PII leakage | TB/Rất cao | Object storage encryption, signed URL, least privilege, retention/access audit | Access anomaly; Security/Legal |
+| Test baseline che giấu regression | Cao/Cao | Phase 0 green gate; MySQL/contract/security/concurrency suites | Any failing required suite; Engineering |
+| Settlement worker duplication | TB/Cao | Period business uniqueness, line keys, locks/idempotency | Duplicate line/period; Finance Engineering |
+| Event contract drift giữa modules | TB/Cao | Shared schema/compatibility tests/version rules | Consumer deserialization/DLQ; Platform |
+
+## 21. Tóm tắt thay đổi so với Smart Cart cũ
+
+### 21.1 Những điểm đã thay đổi
+
+- Trọng tâm chuyển từ tối ưu checkout/loyalty/payment sang quản lý Partner, membership, offer, partner fulfillment, commission và settlement.
+- Checkout, inventory reservation, payment/refund, loyalty, promotion, idempotency, outbox/inbox và Kafka V2 được giữ lại như shared transaction foundation và được cập nhật theo source mới nhất.
+- Nhận định cũ “chưa có checkout/reservation/refund/outbox/inbox” không còn đúng; commit `43b2f0d` đã có source/migrations, nhưng còn partial/cutover debt.
+- Bổ sung mô hình Product catalog + PartnerOffer, PartnerOrder split, immutable commission/payable snapshot và auditable SettlementLine.
+- Bổ sung tenant authorization hai lớp, migration SELLER, partner/admin frontend, AI advisory và risk register.
+
+### 21.2 Những lỗi hiện tại cần sửa trước
+
+1. Public registration có thể chọn ADMIN.
+2. Seller xóa product không ownership check.
+3. `User.products mappedBy = "id"` sai; phải là `"user"` trước khi loại legacy mapping.
+4. Order/payment V1 client-authoritative/thiếu ownership và chạy song song V2.
+5. Refund consumer dùng `refund.version` để update Order.
+6. Notification sender swallow lỗi, V2 chưa durable send worker; payment V2 chưa phát notification.
+7. Product public query không filter active/moderation; product owner nullable; category DTO over-posting.
+8. Main test baseline fail 15 `ProductControllerTest`; Payment test runtime có 22 Mockito attach errors; Notification Service chạy riêng 36/36 pass.
+
+### 21.3 Quyết định kiến trúc quan trọng nhất
+
+Chọn **Product catalog + PartnerOffer (Phương án B)** ngay từ MVP, với backfill bảo thủ 1:1 cho legacy product. Đây là quyết định chi phối cart, inventory, OrderItem snapshot, promotion funding, commission và frontend; trì hoãn sẽ làm migration các bảng giao dịch khó hơn nhiều.
+
+### 21.4 Phạm vi MVP đề xuất
+
+Partner application/approval/suspend, multi-member RBAC, documents metadata, offer moderation/inventory, multi-partner checkout + PartnerOrder, fulfillment state machine, commission snapshot, settlement calculation/review/approve/manual mark-paid, audit/outbox/inbox và notification durable. Full refund được nối vào settlement; partial refund, multi-warehouse, automatic payout và AI risk automation deferred.
+
+### 21.5 Câu hỏi còn chờ chủ dự án
+
+Các câu hỏi blocking nhất là: xác nhận model B; multi-partner membership; promotion funding; commission base; fulfillment/settlement eligibility; refund carry-forward; split-order rejection policy; settlement cycle; legacy seller verification; suspension behavior; document retention; và AI có nằm trong MVP hay không. Checklist đầy đủ ở mục 19.

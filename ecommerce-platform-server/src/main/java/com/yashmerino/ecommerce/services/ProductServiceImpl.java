@@ -132,6 +132,13 @@ public class ProductServiceImpl implements ProductService {
     public void delete(Long id) {
         Product product = this.getProduct(id);
 
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String currentUsername = authentication == null ? null : authentication.getName();
+        if (currentUsername == null || product.getUser() == null
+                || !currentUsername.equals(product.getUser().getUsername())) {
+            throw new AccessDeniedException("access_denied");
+        }
+
         productRepository.delete(product);
     }
 

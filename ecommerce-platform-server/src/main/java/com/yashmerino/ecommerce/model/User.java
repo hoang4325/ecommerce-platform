@@ -55,7 +55,7 @@ public class User extends NamedEntity {
      * User's products.
      */
     @JsonManagedReference
-    @OneToMany(mappedBy = "id", cascade = CascadeType.ALL)
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private Set<Product> products;
 
     /**
