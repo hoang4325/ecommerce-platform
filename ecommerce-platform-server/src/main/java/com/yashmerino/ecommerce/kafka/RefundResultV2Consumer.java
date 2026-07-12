@@ -94,6 +94,45 @@ public class RefundResultV2Consumer {
         if (userId == null) return;
         jdbc.update("INSERT INTO spend_ledger(user_id,order_id,refund_id,amount,currency,transaction_type,external_reference,idempotency_key) VALUES (?,?,?, ?,?,'REFUND',?,?)",
                 userId, refund.getOrderId(), refund.getId(), refund.getAmount().negate(), refund.getCurrency(), refund.getExternalRefundId(), "spend:refund:" + refund.getId());
+
+        // PartnerOrder settlement reversal
+        jdbc.query("SELECT po.id,po.partner_id,po.subtotal,po.commission_amount,po.settlement_id,po.settlement_status,s.status AS set_status " +
+                    "FROM partner_orders po LEFT JOIN settlements s ON s.id=po.settlement_id " +
+                    "WHERE po.order_id=? AND po.status='DELIVERED' FOR UPDATE",
+                poRs -> {
+                    while (poRs.next()) {
+                        Long partnerOrderId = poRs.getLong("id");
+                        Long partnerId = poRs.getLong("partner_id");
+                        BigDecimal subtotal = poRs.getBigDecimal("subtotal");
+                        BigDecimal commissionAmount = poRs.getBigDecimal("commission_amount");
+                        String settlementStatus = poRs.getString("settlement_status");
+                        String settlementState = poRs.getString("set_status");
+
+                        String idempotencyKey = "REFUND:" + refund.getId() + ":" + partnerOrderId;
+
+                        if ("SETTLED".equals(settlementStatus) && settlementState != null
+                                && ("APPROVED".equals(settlementState) || "PAID".equals(settlementState))) {
+                            // Create carry-forward reversal for next settlement period
+                            jdbc.update("INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
+                                        "VALUES (NULL,?,?,'REFUND_REVERSAL',?,?,?,?,?,'Pending carry-forward from refund',?)",
+                                    partnerId, refund.getOrderId(), partnerOrderId, refund.getId(),
+                                    refund.getAmount().negate(), refund.getCurrency(), idempotencyKey);
+                        } else if ("SETTLED".equals(settlementStatus) && settlementState != null
+                                && ("CALCULATED".equals(settlementState) || "OPEN".equals(settlementState)
+                                    || "UNDER_REVIEW".equals(settlementState))) {
+                            // Add refund line to current settlement
+                            Long settlementId = poRs.getLong("settlement_id");
+                            jdbc.update("INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
+                                        "VALUES (?,?,'REFUND',?,?,?,?,?,?,'Refund reversal',?)" +
+                                        "ON DUPLICATE KEY UPDATE id=id",
+                                    settlementId, partnerId, refund.getOrderId(), partnerOrderId, refund.getId(),
+                                    refund.getAmount().negate(), refund.getCurrency(), idempotencyKey);
+                            jdbc.update("UPDATE settlements SET refund_amount=refund_amount+?,payable_amount=payable_amount-?,version=version+1 WHERE id=?",
+                                    refund.getAmount().abs(), refund.getAmount().abs(), settlementId);
+                        }
+                    }
+                    return null;
+                }, refund.getOrderId());
         Long accountId = jdbc.query("SELECT id FROM loyalty_accounts WHERE user_id=? FOR UPDATE", rs -> rs.next()?rs.getLong(1):null, userId);
         if (accountId == null) return;
         jdbc.query("SELECT id,original_points,remaining_points FROM point_lots WHERE account_id=? AND source_order_id=? AND lot_type='EARNED' FOR UPDATE", rs -> {

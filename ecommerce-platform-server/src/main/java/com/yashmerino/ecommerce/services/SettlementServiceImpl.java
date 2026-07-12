@@ -50,7 +50,7 @@ public class SettlementServiceImpl implements SettlementService {
     }
 
     private SettlementResponse doCalculateSettlement(Long partnerId, LocalDateTime periodStart,
-                                                      LocalDateTime periodEnd, String currency) {
+                                                       LocalDateTime periodEnd, String currency) {
         String resolvedCurrency = currency != null ? currency : "USD";
 
         Settlement settlement = settlementRepository
@@ -58,12 +58,16 @@ public class SettlementServiceImpl implements SettlementService {
                 .orElse(null);
 
         if (settlement != null) {
-            if (settlement.getStatus() == SettlementStatus.PAID) {
-                throw new ConflictException("settlement_already_paid");
+            if (settlement.getStatus() == SettlementStatus.PAID || settlement.getStatus() == SettlementStatus.APPROVED) {
+                throw new ConflictException("settlement_already_finalized");
             }
-            settlementLineRepository.deleteBySettlementId(settlement.getId());
-            settlementLineRepository.flush();
-        } else {
+            if (settlement.getStatus() == SettlementStatus.CALCULATED || settlement.getStatus() == SettlementStatus.OPEN) {
+                settlementLineRepository.deleteBySettlementId(settlement.getId());
+                settlementLineRepository.flush();
+            }
+        }
+
+        if (settlement == null) {
             settlement = new Settlement();
             settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
             settlement.getPartner().setId(partnerId);
@@ -94,13 +98,13 @@ public class SettlementServiceImpl implements SettlementService {
             line.setPartnerOrderId(po.getId());
             line.setAmount(po.getSubtotal());
             line.setCurrency(po.getCurrency());
-            line.setIdempotencyKey("settlement-line:" + settlement.getId() + ":" + po.getId());
+            line.setIdempotencyKey("SALE:" + po.getId());
             settlementLineRepository.save(line);
         }
 
         settlement.setGrossSales(grossSales);
         settlement.setCommissionAmount(commissionAmount);
-        settlement.setPayableAmount(grossSales.subtract(commissionAmount));
+        settlement.setPayableAmount(grossSales.subtract(commissionAmount).max(BigDecimal.ZERO));
         settlement = settlementRepository.save(settlement);
 
         if (!deliveredOrders.isEmpty()) {

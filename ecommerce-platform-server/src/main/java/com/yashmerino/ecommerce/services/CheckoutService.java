@@ -65,6 +65,7 @@ public class CheckoutService {
     private final ObjectMapper objectMapper;
     private final InboxService inboxService;
     private final CommissionService commissionService;
+    private final OutboxService outboxService;
 
     @Value("${checkout.reservation-ttl:PT15M}")
     private Duration reservationTtl;
@@ -142,10 +143,10 @@ public class CheckoutService {
                         line.quantity(), line.productId(), line.quantity());
                 if (changed != 1) throw new InsufficientStockException();
             }
+            String sourceType = line.offerId() != null ? "OFFER" : "PRODUCT";
             jdbc.update("INSERT INTO inventory_reservations(product_id,order_id,quantity,status,expires_at,inventory_source_type,offer_id,idempotency_key) VALUES (?,?,?,'RESERVED',?,?,?,?)",
                     line.productId(), order.getId(), line.quantity(), expiresAt,
-                    line.offerId() != null && line.offerId() > 0 ? "OFFER" : "PRODUCT",
-                    line.offerId() != null ? line.offerId() : 0L,
+                    sourceType, line.offerId(),
                     "inventory:reserve:" + order.getId() + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : 0L));
         }
         if (promotion != null) {
@@ -153,6 +154,8 @@ public class CheckoutService {
                     promotion.id(), user.getId(), order.getId(), couponDiscount, expiresAt, "promotion:reserve:" + promotion.id() + ":" + order.getId());
         }
         if (request.requestedPoints() > 0) reservePoints(user.getId(), order.getId(), request.requestedPoints(), pointValue, currency, expiresAt);
+
+        createPartnerOrdersAtCheckout(order.getId());
 
         Payment payment = new Payment(order, total, PaymentStatus.AWAITING_PAYMENT_METHOD);
         payment.setCurrency(currency);
@@ -271,6 +274,8 @@ public class CheckoutService {
             return null;
         }, orderId);
 
+        cancelAwaitingPartnerOrders(orderId);
+
         int orderChanged = jdbc.update("UPDATE orders SET status='CANCELLED',version=version+1 WHERE id=? AND status='CREATED'", orderId);
         if (orderChanged != 1) throw new ConflictException("order_state_changed");
     }
@@ -358,6 +363,7 @@ public class CheckoutService {
                 order.getId(), OrderStatus.PAYMENT_PENDING, OrderStatus.PAYMENT_FAILED, order.getVersion());
             if (orderUpdated == 0) throw new OptimisticLockException("Order version conflict");
             releaseReservations(order.getId());
+            cancelAwaitingPartnerOrders(order.getId());
         }
         inboxService.markProcessed("main-server", event.eventId(), "PaymentResultEventV2",
             event.correlationId(), event.aggregateId());
@@ -384,7 +390,7 @@ public class CheckoutService {
             return null;
         }, order.getId());
         jdbc.update("UPDATE inventory_reservations SET status='COMMITTED',version=version+1,updated_at=CURRENT_TIMESTAMP(6) WHERE order_id=? AND status='RESERVED'", order.getId());
-        createPartnerOrders(order.getId());
+        activatePartnerOrdersAfterPayment(order.getId());
         jdbc.query("SELECT promotion_id,user_id FROM promotion_reservations WHERE order_id=? AND status='RESERVED' FOR UPDATE", rs -> {
             while (rs.next()) jdbc.update("UPDATE promotion_usage_counters SET reserved_orders=reserved_orders-1,consumed_orders=consumed_orders+1,version=version+1 WHERE promotion_id=? AND user_id=? AND reserved_orders>0", rs.getLong(1), rs.getLong(2));
             return null;
@@ -417,6 +423,89 @@ public class CheckoutService {
         }
         jdbc.update("INSERT INTO spend_ledger(user_id,order_id,amount,currency,transaction_type,external_reference,idempotency_key) VALUES (?,?,?,?,'QUALIFIED_SPEND',?,?)",
                 userId,order.getId(),qualifying,order.getCurrency(),externalPaymentId,"spend:qualified:"+order.getId());
+    }
+
+    private void createPartnerOrdersAtCheckout(Long orderId) {
+        List<CommissionService.CommissionRequest> requests = jdbc.query(
+                "SELECT oi.product_id,oi.offer_id,oi.partner_id,oi.line_total,o.currency," +
+                "       (SELECT GROUP_CONCAT(pc.categories_id) FROM products_categories pc WHERE pc.product_id=oi.product_id) AS category_ids " +
+                "FROM order_items oi " +
+                "JOIN orders o ON o.id=oi.order_id " +
+                "WHERE oi.order_id=? AND oi.partner_id IS NOT NULL FOR UPDATE",
+                (rs, n) -> {
+                    String catIds = rs.getString("category_ids");
+                    return new CommissionService.CommissionRequest(
+                            rs.getLong("product_id"),
+                            rs.getObject("offer_id", Long.class),
+                            catIds != null ? Long.valueOf(catIds.split(",")[0]) : null,
+                            rs.getLong("partner_id"),
+                            rs.getBigDecimal("line_total"),
+                            rs.getString("currency"));
+                },
+                orderId);
+
+        List<CommissionService.CommissionResult> results = commissionService.resolveOrderItemCommissions(requests);
+
+        for (CommissionService.CommissionResult r : results) {
+            jdbc.update("UPDATE order_items SET " +
+                            "commission_rule_id=?,commission_rate=?,commission_fixed_fee=?," +
+                            "commission_amount=?,partner_payable_amount=? " +
+                            "WHERE order_id=? AND product_id=? AND COALESCE(offer_id,0)=COALESCE(?,0)",
+                    r.commissionRuleId(), r.rate(), r.fixedFee(),
+                    r.commissionAmount(), r.partnerPayable(),
+                    orderId, r.productId(), r.offerId());
+        }
+
+        jdbc.query("SELECT partner_id,SUM(line_total) AS subtotal," +
+                    "SUM(commission_amount) AS total_commission," +
+                    "SUM(partner_payable_amount) AS total_payable,currency " +
+                    "FROM order_items WHERE order_id=? AND partner_id IS NOT NULL " +
+                    "GROUP BY partner_id FOR UPDATE",
+                rs -> {
+                    while (rs.next()) {
+                        Long partnerId = rs.getLong("partner_id");
+                        BigDecimal subtotal = rs.getBigDecimal("subtotal");
+                        BigDecimal commissionAmount = rs.getBigDecimal("total_commission");
+                        BigDecimal payable = rs.getBigDecimal("total_payable");
+                        String currency = rs.getString("currency");
+
+                        jdbc.update("INSERT INTO partner_orders(order_id,partner_id,status,subtotal,discount_allocation,shipping_allocation,commission_amount,partner_payable_amount,currency,settlement_status,version,created_at,updated_at) " +
+                                    "VALUES (?,?,'AWAITING_PAYMENT',?,0,0,?,?,?,?,'UNSETTLED',0,NOW(),NOW())",
+                                orderId, partnerId, subtotal, commissionAmount, payable, currency);
+                    }
+                    return null;
+                }, orderId);
+
+        jdbc.update("UPDATE order_items oi " +
+                    "JOIN partner_orders po ON po.order_id=oi.order_id AND po.partner_id=oi.partner_id " +
+                    "SET oi.partner_order_id=po.id " +
+                    "WHERE oi.order_id=?", orderId);
+    }
+
+    private void activatePartnerOrdersAfterPayment(Long orderId) {
+        jdbc.update("UPDATE partner_orders SET status='NEW',updated_at=NOW() " +
+                    "WHERE order_id=? AND status='AWAITING_PAYMENT'", orderId);
+        List<Long> poIds = jdbc.query("SELECT id FROM partner_orders WHERE order_id=? AND status='NEW'",
+                (rs, n) -> rs.getLong(1), orderId);
+        for (Long poId : poIds) {
+            outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", poId,
+                    "PARTNER_ORDER_ACTIVATED", "partner.order.activated", poId.toString(),
+                    Map.of("partnerOrderId", poId, "orderId", orderId, "status", "NEW"),
+                    "partner-order:activate:" + poId);
+        }
+    }
+
+    private void cancelAwaitingPartnerOrders(Long orderId) {
+        List<Long> poIds = jdbc.query("SELECT id FROM partner_orders WHERE order_id=? AND status='AWAITING_PAYMENT'",
+                (rs, n) -> rs.getLong(1), orderId);
+        jdbc.update("UPDATE partner_orders SET status='CANCELLED',cancelled_at=NOW(),cancel_reason='payment_failed_or_expired',updated_at=NOW() " +
+                    "WHERE order_id=? AND status='AWAITING_PAYMENT'", orderId);
+        for (Long poId : poIds) {
+            outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", poId,
+                    "PARTNER_ORDER_CANCELLED", "partner.order.cancelled", poId.toString(),
+                    Map.of("partnerOrderId", poId, "orderId", orderId, "status", "CANCELLED", "reason", "payment_failed_or_expired"),
+                    "partner-order:cancel:" + poId + ":payment");
+        }
     }
 
     private void createPartnerOrders(Long orderId) {

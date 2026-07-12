@@ -57,10 +57,10 @@ public class CartItem extends BaseEntity {
     private Product product;
 
     /**
-     * Partner offer reference (0 for non-offer items).
+     * Partner offer reference (null for legacy product-only items).
      */
-    @Column(name = "offer_id", nullable = false)
-    private long offerId;
+    @Column(name = "offer_id")
+    private Long offerId;
 
     /**
      * Optional partner ID (denormalized from offer for query convenience).

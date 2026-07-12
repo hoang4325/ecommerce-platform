@@ -76,6 +76,8 @@ public class CheckoutExpiryJob {
                     accountId, orderId, reservationId, returned, currency, "loyalty:released:" + reservationId, accountId);
             return null;
         }, orderId);
+        jdbc.update("UPDATE partner_orders SET status='CANCELLED',cancelled_at=NOW(),cancel_reason='checkout_expired',updated_at=NOW() " +
+                    "WHERE order_id=? AND status='AWAITING_PAYMENT'", orderId);
         jdbc.update("UPDATE orders SET status='EXPIRED',version=version+1 WHERE id=? AND status='CREATED'", orderId);
     }
 }

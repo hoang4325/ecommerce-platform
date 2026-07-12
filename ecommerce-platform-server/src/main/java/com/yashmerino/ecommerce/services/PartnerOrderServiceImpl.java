@@ -18,10 +18,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.security.MessageDigest;
+import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 
@@ -97,6 +100,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 PartnerOrderStatus.ACCEPTED.name(), partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
 
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.NEW, PartnerOrderStatus.ACCEPTED, null, null, null);
+
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_ACCEPTED", "partner.order.accepted", partnerOrderId.toString(),
                 Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "ACCEPTED"),
@@ -122,6 +128,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 "UPDATE partner_orders SET status=?, rejected_at=NOW(), rejection_reason=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
                 PartnerOrderStatus.REJECTED.name(), reason, partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.NEW, PartnerOrderStatus.REJECTED, reason, null, null);
 
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_REJECTED", "partner.order.rejected", partnerOrderId.toString(),
@@ -149,6 +158,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 PartnerOrderStatus.PACKING.name(), partnerOrderId, PartnerOrderStatus.ACCEPTED.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
 
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.ACCEPTED, PartnerOrderStatus.PACKING, null, null, null);
+
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_PACKING", "partner.order.packing", partnerOrderId.toString(),
                 Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "PACKING"),
@@ -174,6 +186,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 "UPDATE partner_orders SET status=?, ready_to_ship_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
                 PartnerOrderStatus.READY_TO_SHIP.name(), partnerOrderId, PartnerOrderStatus.PACKING.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.PACKING, PartnerOrderStatus.READY_TO_SHIP, null, null, null);
 
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_READY_TO_SHIP", "partner.order.ready-to-ship", partnerOrderId.toString(),
@@ -201,6 +216,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 PartnerOrderStatus.SHIPPED.name(), partnerOrderId, PartnerOrderStatus.READY_TO_SHIP.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
 
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.READY_TO_SHIP, PartnerOrderStatus.SHIPPED, null, null, null);
+
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_SHIPPED", "partner.order.shipped", partnerOrderId.toString(),
                 Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "SHIPPED"),
@@ -226,6 +244,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 "UPDATE partner_orders SET status=?, delivered_at=NOW(), version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
                 PartnerOrderStatus.DELIVERED.name(), partnerOrderId, PartnerOrderStatus.SHIPPED.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.SHIPPED, PartnerOrderStatus.DELIVERED, null, null, null);
 
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_DELIVERED", "partner.order.delivered", partnerOrderId.toString(),
@@ -254,6 +275,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 PartnerOrderStatus.CANCELLED.name(), reason, partnerOrderId, currentStatus, row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
 
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                row.status(), PartnerOrderStatus.CANCELLED, reason, null, null);
+
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_CANCELLED", "partner.order.cancelled", partnerOrderId.toString(),
                 Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "CANCELLED", "reason", reason),
@@ -279,6 +303,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 "UPDATE partner_orders SET status=?, cancel_reason=?, version=version+1, updated_at=NOW() WHERE id=? AND status=? AND version=?",
                 PartnerOrderStatus.RETURN_REQUESTED.name(), reason, partnerOrderId, PartnerOrderStatus.DELIVERED.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
+
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.DELIVERED, PartnerOrderStatus.RETURN_REQUESTED, reason, null, null);
 
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_RETURN_REQUESTED", "partner.order.return-requested", partnerOrderId.toString(),
@@ -306,12 +333,33 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 PartnerOrderStatus.RETURNED.name(), partnerOrderId, PartnerOrderStatus.RETURN_REQUESTED.name(), row.version());
         if (updated != 1) throw new ConflictException("partner_order_state_changed");
 
+        writeAuditLog(partnerOrderId, partnerId, currentUserId(),
+                PartnerOrderStatus.RETURN_REQUESTED, PartnerOrderStatus.RETURNED, null, null, null);
+
         outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                 "PARTNER_ORDER_RETURNED", "partner.order.returned", partnerOrderId.toString(),
                 Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "RETURNED"),
                 "partner-order:approve-return:" + partnerOrderId);
 
         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+    }
+
+    private void writeAuditLog(Long partnerOrderId, Long partnerId, Long actorUserId,
+                                PartnerOrderStatus fromStatus, PartnerOrderStatus toStatus,
+                                String reason, String idempotencyKey, String correlationId) {
+        jdbc.update("INSERT INTO partner_order_audit(partner_order_id,partner_id,actor_user_id,from_status,to_status,reason,idempotency_key,correlation_id,occurred_at) " +
+                    "VALUES (?,?,?,?,?,?,?,?,NOW())",
+                partnerOrderId, partnerId, actorUserId,
+                fromStatus != null ? fromStatus.name() : null,
+                toStatus != null ? toStatus.name() : null,
+                reason, idempotencyKey, correlationId);
+    }
+
+    private Long currentUserId() {
+        Object principal = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+        if (!(principal instanceof org.springframework.security.core.userdetails.UserDetails)) return null;
+        return jdbc.queryForObject("SELECT id FROM users WHERE username=?",
+                Long.class, ((org.springframework.security.core.userdetails.UserDetails) principal).getUsername());
     }
 
     private PartnerOrderRow selectForUpdate(Long partnerId, Long partnerOrderId) {

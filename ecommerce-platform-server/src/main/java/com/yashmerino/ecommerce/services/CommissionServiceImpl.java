@@ -29,19 +29,9 @@ public class CommissionServiceImpl implements CommissionService {
             return List.of();
         }
 
-        Map<Long, List<RuleRow>> rulesByPartner = items.stream()
-                .collect(Collectors.groupingBy(
-                        i -> i.partnerId() != null ? i.partnerId() : 0L,
-                        Collectors.collectingAndThen(
-                                Collectors.toList(),
-                                list -> loadRules(list.get(0).partnerId())
-                        )
-                ));
-
         List<CommissionResult> results = new ArrayList<>(items.size());
         for (CommissionRequest item : items) {
-            Long partnerKey = item.partnerId() != null ? item.partnerId() : 0L;
-            List<RuleRow> rules = rulesByPartner.getOrDefault(partnerKey, List.of());
+            List<RuleRow> rules = loadRules(item.partnerId(), item.currency());
             RuleRow best = findBestMatch(rules, item.productId(), item.categoryId(), item.partnerId());
 
             if (best == null) {
@@ -65,15 +55,17 @@ public class CommissionServiceImpl implements CommissionService {
         return results;
     }
 
-    private List<RuleRow> loadRules(Long partnerId) {
+    private List<RuleRow> loadRules(Long partnerId, String currency) {
         return jdbc.query(
                 "SELECT id,rate,fixed_fee,partner_id,category_id,product_id,priority,valid_from " +
                 "FROM commission_rules WHERE status='ACTIVE' " +
                 "AND (partner_id IS NULL OR partner_id=?) " +
+                "AND (currency IS NULL OR currency=?) " +
                 "AND (valid_from IS NULL OR valid_from<=CURRENT_TIMESTAMP(6)) " +
                 "AND (valid_to IS NULL OR valid_to>=CURRENT_TIMESTAMP(6))",
                 (rs, n) -> mapRule(rs),
-                partnerId != null ? partnerId : 0L);
+                partnerId != null ? partnerId : 0L,
+                currency != null ? currency : "USD");
     }
 
     private RuleRow mapRule(ResultSet rs) throws SQLException {
@@ -92,8 +84,8 @@ public class CommissionServiceImpl implements CommissionService {
     private RuleRow findBestMatch(List<RuleRow> rules, long productId, Long categoryId, Long partnerId) {
         return rules.stream()
                 .filter(r -> isMatch(r, productId, categoryId, partnerId))
-                .max(Comparator.comparingInt((RuleRow r) -> specificity(r, productId, categoryId, partnerId))
-                        .thenComparingInt(RuleRow::priority)
+                .min(Comparator.comparingInt((RuleRow r) -> specificity(r, productId, categoryId, partnerId))
+                        .thenComparing(Comparator.comparingInt(RuleRow::priority).reversed())
                         .thenComparing(r -> r.validFrom(), Comparator.nullsLast(Comparator.naturalOrder()))
                         .thenComparingLong(RuleRow::id))
                 .orElse(null);

@@ -923,7 +923,23 @@ Exit: không còn client-authoritative order/payment path; Seller A/B security t
 
 ## 21. Implementation summary (2026-07-12)
 
-This section summarizes the implementation completed during the MVP build session.
+### Domain Classification (verified against source code)
+
+| Domain | Status | Key Evidence |
+|--------|--------|-------------|
+| Partner application | **IMPLEMENTED** | V7, Partner entity, PartnerService, AdminPartnerController |
+| PartnerMember    | **IMPLEMENTED** | V7, PartnerMember entity, role/permission checks |
+| PartnerOffer     | **IMPLEMENTED** | V8, PartnerOffer entity/service, CartItem.addOfferToCart |
+| Cart integration | **IMPLEMENTED** | V11 (offer_id/partner_id), CartItem entity, CartItemController POST |
+| Checkout/PartnerOrder | **IMPLEMENTED** | V9 (partner_orders), V12 (AWAITING_PAYMENT), `createPartnerOrdersAtCheckout` |
+| Inventory reservation | **IMPLEMENTED** | V4+V12+V13, inventory_source_type, inventory_source_key |
+| Commission       | **IMPLEMENTED** | V10, CommissionRule entity, CommissionServiceImpl |
+| Settlement       | **IMPLEMENTED** | V10, Settlement/SettlementLine entities, SettlementServiceImpl |
+| Refund           | **PARTIAL** | V2 consumer exists, settlement reversal added in V13 fix |
+| Fulfillment state machine | **IMPLEMENTED** | PartnerOrderServiceImpl with full transitions |
+| Audit logging    | **IMPLEMENTED** | V13 `partner_order_audit` table, written on every transition |
+| Idempotency      | **PARTIAL** | Checkout uses idempotency-key + request_hash; PartnerOrder uses status idempotency |
+| End-to-end test  | **IMPLEMENTED** | Phase2MigrationMySqlTest.endToEndPartnerWorkflow() |
 
 ### Phase A — Security & Application Flow
 
@@ -935,27 +951,44 @@ This section summarizes the implementation completed during the MVP build sessio
 
 ### Phase B — Cart/Checkout Integration
 
-- **`CartItem` model**: Added `offerId` and `partnerId` fields.
+- **`CartItem` model**: Added `offerId` (Long, nullable) and `partnerId` fields.
 - **`CheckoutService` cart query**: Updated to LEFT JOIN `partner_offers`; uses `COALESCE(po.price, p.price)` for pricing; checks offer stock when `offer_id` is present.
-- **Inventory reservation**: Reserves offer stock (`partner_offers.reserved_quantity`) for offer items, product stock for regular items.
-- **Order item snapshot**: Includes `offer_id` and `partner_id` in INSERT.
-- **`createPartnerOrders`**: Creates `PartnerOrder(NEW)` records on payment success, grouped by partner, with commission calculation (most-specific rule wins) and `partnerPayableAmount = subtotal - commission`.
+- **Inventory reservation**: Reserves offer stock (`partner_offers.reserved_quantity`) for offer items, product stock for regular items. Uses `inventory_source_type` and `inventory_source_key` for proper unique constraint.
+- **Order item snapshot**: Includes `offer_id`, `partner_id`, and `currency` in INSERT.
+- **`createPartnerOrdersAtCheckout`**: Creates `PartnerOrder(AWAITING_PAYMENT)` records during checkout, grouped by partner, with commission calculation and `partnerPayableAmount` snapshot. Payment success transitions `AWAITING_PAYMENT → NEW` via `activatePartnerOrdersAfterPayment`. Payment failure/expiry transitions `AWAITING_PAYMENT → CANCELLED` via `cancelAwaitingPartnerOrders`.
 
 ### Phase C — PartnerOrder Workflow
 
-- **Full state machine implemented**: `NEW → ACCEPTED → PACKING → READY_TO_SHIP → SHIPPED → DELIVERED` (happy path); `NEW → REJECTED`; `ACCEPTED/PACKING/READY_TO_SHIP → CANCELLED`; `DELIVERED → RETURN_REQUESTED → RETURNED`.
-- **Controller endpoints**: Added `deliver`, `cancel`, `return-request`, `approve-return`.
+- **Full state machine implemented**: `AWAITING_PAYMENT → NEW → ACCEPTED → PACKING → READY_TO_SHIP → SHIPPED → DELIVERED` (happy path); `NEW → REJECTED`; `ACCEPTED/PACKING/READY_TO_SHIP → CANCELLED`; `DELIVERED → RETURN_REQUESTED → RETURNED`.
+- **Audit logging**: Every transition writes to `partner_order_audit` with actor, from/to status, reason, and idempotency key.
+- **Outbox events**: Every transition publishes via `outbox_events`.
 
 ### Phase D+E — Commission & Settlement
 
-- **Commission calculation**: Added to `CheckoutService.createPartnerOrders` using `commission_rules` table with specificity/priority ordering (product > category > partner > global).
-- **Settlement service**: Proper query, authz, state transitions (CALCULATED → APPROVED via admin, APPROVED → PAID via markPaid).
+- **Commission calculation**: Uses `commission_rules` table with specificity/priority ordering (product > category > partner > global). Filters by currency. Corrected from `max()` to `min()` specificity comparator to ensure most-specific rule wins.
+- **Settlement service**: Idempotent calculation with unique period+partner+currency key. Transition chain: CALCULATED → UNDER_REVIEW → APPROVED → PAID. Refund creates carry-forward reversal lines when settlement is APPROVED/PAID, or adjusts current OPEN/CALCULATED settlement.
 - **All admin endpoints** (`approveSettlement`, `markPaid`, `addAdjustment`) gated by `ADMIN` role in `SecurityConfig`.
+
+### Key Bug Fixes (V13+)
+
+1. **P0 — `offer_id = 0` sentinel**: V12 used sentinel `0` for legacy products, conflicting with FK constraints. V13 reverts to `NULL` semantics: `offer_id IS NULL` → legacy Product, `offer_id IS NOT NULL` → PartnerOffer.
+2. **P0 — CartItem `long offerId`**: Changed to `Long offerId` (nullable wrapper). Repository method signature updated accordingly.
+3. **P0 — PartnerOrder created after payment**: Moved to checkout phase with `AWAITING_PAYMENT` status. Payment success → `NEW`, payment failure/expiry → `CANCELLED`.
+4. **P0 — Commission specificity ordering**: `findBestMatch` used `max()` which selected global rules over product rules. Fixed to `min()` with reversed priority.
+5. **P0 — Settlement non-idempotent**: `doCalculateSettlement` used `DELETE+recreate` on lines. Fixed to only recalculate for OPEN/CALCULATED, reject APPROVED/PAID.
+6. **P1 — Commission currency filter**: Added `AND (currency IS NULL OR currency=?)` to rule query.
+7. **P1 — Missing stock CHECK constraints**: Added `chk_product_stock` and `chk_offer_stock` constraints.
+8. **P1 — Missing `inventory_source_key`**: Added generated column `CONCAT(inventory_source_type, ':', COALESCE(offer_id, product_id))` with unique `(order_id, inventory_source_key)`.
+9. **P1 — Missing `order_items.currency`**: Added column.
+10. **P1 — Refund settlement connection**: Added settlement reversal/carry-forward logic to `RefundResultV2Consumer.applyFinancialAndLoyaltyReversal`.
+11. **P1 — CheckoutExpiryJob PartnerOrder**: Added cancellation of `AWAITING_PAYMENT` PartnerOrders on checkout expiry.
+12. **P2 — Audit logging**: Added `partner_order_audit` table and writes on every PartnerOrder transition.
+13. **P2 — Phase2MigrationMySqlTest**: Fixed `applicant_id` → `applicant_user_id`, removed `partner_offers.name` column reference.
 
 ### Tests
 
-- 104 unit tests across 5 test classes: `PartnerServiceImplTest` (14), `PartnerOfferServiceImplTest` (15), `PartnerOrderServiceImplTest` (17), `SettlementServiceImplTest` (10), `PartnerAuthorizationServiceTest` (28).
-- All tests compile and pass.
+- 104 unit tests + 1 end-to-end MySQL 8 integration test across test classes.
+- Phase2MigrationMySqlTest validates V12/V13 migrations, schema constraints, inventory reservations, and the full PartnerOrder lifecycle.
 
 ## 22. Tóm tắt thay đổi so với Smart Cart cũ
 
