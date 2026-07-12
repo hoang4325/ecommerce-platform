@@ -172,6 +172,32 @@ class SettlementServiceImplTest {
     }
 
     @Test
+    void calculateSettlement_NegativeCarryForward_PayableIsZeroAndResidualDebtCarriedForward() {
+        lenient().doNothing().when(authz).requireSettlementRead(PARTNER_ID);
+
+        lenient().when(settlementRepository.save(any(Settlement.class))).thenAnswer(invocation -> {
+            Settlement saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(SETTLEMENT_ID);
+            }
+            return saved;
+        });
+
+        lenient().when(settlementRepository.findByPartnerIdAndCurrency(eq(PARTNER_ID), anyString(), any(Pageable.class))).thenReturn(Page.empty());
+        lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
+        lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
+                eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of());
+        lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(300L, new BigDecimal("-25.00"), "adj-300")))
+                .when(jdbc).query(contains("pending_settlement_adjustments"), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
+
+        var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
+
+        assertEquals(BigDecimal.ZERO, response.payableAmount());
+        verify(jdbc).update(startsWith("INSERT INTO pending_settlement_adjustments"),
+                eq(PARTNER_ID), eq(new BigDecimal("-25.00")), eq("USD"), eq("RESIDUAL_DEBT:" + SETTLEMENT_ID));
+    }
+
+    @Test
     void getSettlements_Success() {
         lenient().doNothing().when(authz).requireSettlementRead(PARTNER_ID);
         PageRequest pageable = PageRequest.of(0, 10);

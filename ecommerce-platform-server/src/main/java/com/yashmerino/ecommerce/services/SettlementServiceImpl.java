@@ -143,22 +143,31 @@ public class SettlementServiceImpl implements SettlementService {
                     settlement.getId(), line.getId(), p.id());
         }
 
-        // Full payable formula
-        BigDecimal refundAmount = BigDecimal.ZERO; // will be populated from settlement_lines REFUND type
-        BigDecimal manualAdjustment = BigDecimal.ZERO; // will be populated from ADJUSTMENT lines
+        // Full payable formula (Policy B: never negative, carry-forward residual debt)
+        BigDecimal refundAmount = BigDecimal.ZERO;
+        BigDecimal manualAdjustment = BigDecimal.ZERO;
+
+        BigDecimal rawPayable = grossSales
+                .subtract(commissionAmount)
+                .subtract(refundAmount)
+                .add(manualAdjustment)
+                .add(carryForwardAmount);
+        BigDecimal finalPayable = rawPayable.max(BigDecimal.ZERO);
+        BigDecimal residualDebt = rawPayable.compareTo(BigDecimal.ZERO) < 0 ? rawPayable.negate() : BigDecimal.ZERO;
 
         settlement.setGrossSales(grossSales);
         settlement.setCommissionAmount(commissionAmount);
         settlement.setRefundAmount(refundAmount);
         settlement.setManualAdjustment(manualAdjustment);
-        settlement.setPayableAmount(
-                grossSales
-                .subtract(commissionAmount)
-                .subtract(refundAmount)
-                .add(manualAdjustment)
-                .add(carryForwardAmount)
-                .max(BigDecimal.ZERO));
+        settlement.setPayableAmount(finalPayable);
         settlement = settlementRepository.save(settlement);
+
+        if (residualDebt.compareTo(BigDecimal.ZERO) > 0) {
+            String ck = "RESIDUAL_DEBT:" + settlement.getId();
+            jdbc.update("INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,reason,idempotency_key) " +
+                            "VALUES (?,NULL,NULL,NULL,?,?,'residual-debt-carried-forward',?) ON DUPLICATE KEY UPDATE id=id",
+                    partnerId, residualDebt.negate(), resolvedCurrency, ck);
+        }
 
         if (!deliveredOrders.isEmpty()) {
             List<Long> orderIds = deliveredOrders.stream().map(PartnerOrder::getId).toList();
@@ -276,5 +285,5 @@ public class SettlementServiceImpl implements SettlementService {
         return SettlementResponse.from(settlement);
     }
 
-    private record PendingAdjustmentRow(Long id, BigDecimal amount, String idempotencyKey) {}
+    record PendingAdjustmentRow(Long id, BigDecimal amount, String idempotencyKey) {}
 }
