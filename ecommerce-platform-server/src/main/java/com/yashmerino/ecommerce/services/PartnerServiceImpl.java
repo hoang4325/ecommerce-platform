@@ -16,6 +16,7 @@ import com.yashmerino.ecommerce.repositories.RoleRepository;
 import com.yashmerino.ecommerce.security.PartnerAuthorizationService;
 import com.yashmerino.ecommerce.services.interfaces.PartnerService;
 import jakarta.persistence.EntityNotFoundException;
+import jakarta.persistence.OptimisticLockException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -25,6 +26,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -169,13 +171,25 @@ public class PartnerServiceImpl implements PartnerService {
         partner.setApprovedBy(admin);
         partner = partnerRepository.save(partner);
 
-        PartnerMember member = new PartnerMember();
-        member.setPartner(partner);
-        member.setUser(partner.getApplicant());
-        member.setRole(PartnerMemberRole.OWNER);
-        member.setStatus(PartnerMemberStatus.ACTIVE);
-        member.setJoinedAt(LocalDateTime.now());
-        partnerMemberRepository.save(member);
+        if (!partnerMemberRepository.findByPartnerIdAndUserId(partnerId, partner.getApplicant().getId()).isPresent()) {
+            PartnerMember member = new PartnerMember();
+            member.setPartner(partner);
+            member.setUser(partner.getApplicant());
+            member.setRole(PartnerMemberRole.OWNER);
+            member.setStatus(PartnerMemberStatus.ACTIVE);
+            member.setJoinedAt(LocalDateTime.now());
+            partnerMemberRepository.save(member);
+        }
+
+        Optional<com.yashmerino.ecommerce.model.Role> partnerRole = roleRepository.findByName(
+                com.yashmerino.ecommerce.utils.Role.PARTNER.name());
+        if (partnerRole.isPresent()) {
+            User applicant = partner.getApplicant();
+            if (applicant.getRoles().stream().noneMatch(r -> r.getName().equals(com.yashmerino.ecommerce.utils.Role.PARTNER.name()))) {
+                applicant.getRoles().add(partnerRole.get());
+                partnerRepository.flush();
+            }
+        }
 
         auditEventRepository.save(createAuditEvent(partner, "APPROVED", PartnerStatus.PENDING_REVIEW.name(), PartnerStatus.APPROVED.name(), admin.getId(), request.reason()));
 
