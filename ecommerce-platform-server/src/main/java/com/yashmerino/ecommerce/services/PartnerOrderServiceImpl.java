@@ -339,7 +339,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                                                   String commandType, String idempotencyKey,
                                                   CommandExecutor executor) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
-            return executor.execute();
+            throw new InvalidInputException("idempotency_key_required");
         }
 
         String requestHash = hash(partnerOrderId + "|" + commandType + "|" + idempotencyKey);
