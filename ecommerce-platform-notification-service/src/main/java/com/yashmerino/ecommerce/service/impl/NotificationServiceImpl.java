@@ -3,13 +3,16 @@ package com.yashmerino.ecommerce.service.impl;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yashmerino.ecommerce.kafka.events.NotificationRequestedEvent;
+import com.yashmerino.ecommerce.kafka.events.NotificationRequestedEventV2;
 import com.yashmerino.ecommerce.model.Notification;
 import com.yashmerino.ecommerce.model.NotificationContent;
 import com.yashmerino.ecommerce.repository.NotificationRepository;
+import com.yashmerino.ecommerce.service.InboxService;
 import com.yashmerino.ecommerce.service.NotificationSender;
 import com.yashmerino.ecommerce.service.NotificationSenderFactory;
 import com.yashmerino.ecommerce.service.NotificationService;
 import com.yashmerino.ecommerce.service.NotificationTemplate;
+import com.yashmerino.ecommerce.utils.ContactType;
 import com.yashmerino.ecommerce.utils.NotificationStatus;
 import com.yashmerino.ecommerce.utils.NotificationType;
 import jakarta.transaction.Transactional;
@@ -47,6 +50,16 @@ public class NotificationServiceImpl implements NotificationService {
      * Notifications' templates.
      */
     private final Map<NotificationType, NotificationTemplate> templates;
+
+    /**
+     * Inbox service for deduplication.
+     */
+    private final InboxService inboxService;
+
+    /**
+     * Object mapper for JSON conversion.
+     */
+    private final ObjectMapper objectMapper;
 
     /**
      * Sends the notification.
@@ -125,5 +138,56 @@ public class NotificationServiceImpl implements NotificationService {
         notification.setStatus(NotificationStatus.FAILED);
         notification.setLastError(e.getMessage());
         notificationRepository.save(notification);
+    }
+
+    @Override
+    @Transactional
+    public void sendNotificationV2(NotificationRequestedEventV2 event) {
+        if (inboxService.isAlreadyProcessed("notification-service", event.eventId())) {
+            log.info("Already processed notification event: {}", event.eventId());
+            return;
+        }
+
+        Notification notification = new Notification();
+        notification.setContact(event.contact());
+        notification.setContactType(ContactType.valueOf(event.contactType()));
+        notification.setNotificationType(NotificationType.valueOf(event.notificationType()));
+        notification.setPayload(convertPayloadToString(event.payload()));
+        notification.setStatus(NotificationStatus.PENDING);
+        notification.setEventId(event.eventId());
+        notification.setBusinessIdempotencyKey(event.idempotencyKey());
+        notification = notificationRepository.save(notification);
+
+        try {
+            NotificationContent content = buildContent(event.notificationType(), event.payload());
+            NotificationSender sender = senderFactory.getSender(event.contactType());
+            sender.send(event.contact(), content);
+
+            notification.setStatus(NotificationStatus.SENT);
+            notification.setSentAt(LocalDateTime.now());
+            notificationRepository.save(notification);
+        } catch (Exception e) {
+            log.error("Failed to send notification: {}", e.getMessage(), e);
+            notification.setStatus(NotificationStatus.FAILED);
+            notification.setLastError(e.getMessage());
+            notificationRepository.save(notification);
+        }
+
+        inboxService.markProcessed("notification-service", event.eventId(),
+            "NotificationRequestedEventV2", event.correlationId(), event.aggregateId());
+    }
+
+    private String convertPayloadToString(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            return "{}";
+        }
+    }
+
+    private NotificationContent buildContent(String notificationType, Map<String, Object> payload) {
+        NotificationType type = NotificationType.valueOf(notificationType);
+        NotificationTemplate template = templates.get(type);
+        return template.build(payload);
     }
 }

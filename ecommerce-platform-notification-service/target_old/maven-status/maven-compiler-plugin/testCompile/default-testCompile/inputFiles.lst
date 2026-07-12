@@ -1,0 +1,7 @@
+/app/src/test/java/com/yashmerino/ecommerce/service/NotificationSenderFactoryTest.java
+/app/src/test/java/com/yashmerino/ecommerce/kafka/NotificationEventListenerTest.java
+/app/src/test/java/com/yashmerino/ecommerce/service/impl/NotificationServiceImplTest.java
+/app/src/test/java/com/yashmerino/ecommerce/service/impl/UserRegisteredTemplateTest.java
+/app/src/test/java/com/yashmerino/ecommerce/service/impl/EmailNotificationSenderTest.java
+/app/src/test/java/com/yashmerino/ecommerce/service/impl/PaymentFailedTemplateTest.java
+/app/src/test/java/com/yashmerino/ecommerce/service/impl/PaymentSuccessTemplateTest.java

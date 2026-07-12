@@ -25,7 +25,11 @@ package com.yashmerino.ecommerce.repositories;
  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 
 import com.yashmerino.ecommerce.model.Payment;
+import com.yashmerino.ecommerce.utils.PaymentStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -36,4 +40,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     Payment findByOrderId(final Long orderId);
     
     Payment findFirstByOrderIdOrderByCreatedAtDesc(final Long orderId);
+
+    java.util.Optional<Payment> findByOrderIdAndStatus(final Long orderId, final PaymentStatus status);
+
+    @Modifying
+    @Query("UPDATE payments p SET p.status = :newStatus, p.version = p.version + 1 WHERE p.id = :id AND p.status = :currentStatus AND p.version = :version")
+    int updateStatusAndVersion(@Param("id") Long id, @Param("currentStatus") PaymentStatus currentStatus, @Param("newStatus") PaymentStatus newStatus, @Param("version") Long version);
 }

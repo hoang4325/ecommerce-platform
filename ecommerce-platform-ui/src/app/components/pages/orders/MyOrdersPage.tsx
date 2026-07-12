@@ -27,10 +27,12 @@ import { useAppSelector } from '../../../hooks';
 import { useNavigate } from 'react-router-dom';
 import { getUserOrders, OrderWithPayment } from '../../../api/OrderRequest';
 import { processPayment } from '../../../api/PaymentRequest';
+import { cancelOrder } from '../../../api/CancelOrderRequest';
 import { getTranslation } from '../../../../i18n/i18n';
 import { STRIPE_PUBLISHABLE_KEY } from '../../../../env-config';
 import ReceiptIcon from '@mui/icons-material/Receipt';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import CancelIcon from '@mui/icons-material/Cancel';
 
 const MyOrdersPage = () => {
     const lang = useAppSelector(state => state.lang.lang);
@@ -44,6 +46,12 @@ const MyOrdersPage = () => {
     const [retryError, setRetryError] = React.useState<string>('');
     const [retrySuccess, setRetrySuccess] = React.useState(false);
     const [isProcessing, setIsProcessing] = React.useState(false);
+
+    const [cancelDialogOpen, setCancelDialogOpen] = React.useState(false);
+    const [orderToCancel, setOrderToCancel] = React.useState<OrderWithPayment | null>(null);
+    const [cancelReason, setCancelReason] = React.useState('');
+    const [cancelError, setCancelError] = React.useState('');
+    const [isCancelling, setIsCancelling] = React.useState(false);
 
     // Stripe setup
     const [stripe, setStripe] = React.useState<any>(null);
@@ -185,6 +193,44 @@ const MyOrdersPage = () => {
         }
     };
 
+    const handleCancelClick = (order: OrderWithPayment) => {
+        setOrderToCancel(order);
+        setCancelDialogOpen(true);
+        setCancelError('');
+        setCancelReason('');
+    };
+
+    const handleConfirmCancel = async () => {
+        if (!orderToCancel) return;
+
+        if (!cancelReason.trim()) {
+            setCancelError(getTranslation(lang, 'cancel_reason_required') || 'Please provide a reason for cancellation');
+            return;
+        }
+
+        setIsCancelling(true);
+        setCancelError('');
+
+        try {
+            const idempotencyKey = crypto.randomUUID();
+            const response = await cancelOrder(orderToCancel.orderId, idempotencyKey, { reason: cancelReason });
+
+            if (response instanceof Response && !response.ok) {
+                setCancelError(getTranslation(lang, 'cancel_failed') || 'Failed to cancel order');
+                setIsCancelling(false);
+                return;
+            }
+
+            setCancelDialogOpen(false);
+            setCancelReason('');
+            setIsCancelling(false);
+            fetchOrders();
+        } catch (error) {
+            setCancelError(getTranslation(lang, 'cancel_error') || 'An error occurred');
+            setIsCancelling(false);
+        }
+    };
+
     const getStatusColor = (status: string): "default" | "success" | "error" | "warning" | "info" => {
         switch (status?.toUpperCase()) {
             case 'SUCCEEDED':
@@ -287,17 +333,30 @@ const MyOrdersPage = () => {
                                             )}
                                         </TableCell>
                                         <TableCell align="center">
-                                            {order.paymentStatus === 'FAILED' && (
-                                                <Button
-                                                    variant="outlined"
-                                                    color="primary"
-                                                    size="small"
-                                                    startIcon={<RefreshIcon />}
-                                                    onClick={() => handleRetryClick(order)}
-                                                >
-                                                    {getTranslation(lang, 'retry_payment') || 'Retry Payment'}
-                                                </Button>
-                                            )}
+                                            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'center' }}>
+                                                {order.paymentStatus === 'FAILED' && (
+                                                    <Button
+                                                        variant="outlined"
+                                                        color="primary"
+                                                        size="small"
+                                                        startIcon={<RefreshIcon />}
+                                                        onClick={() => handleRetryClick(order)}
+                                                    >
+                                                        {getTranslation(lang, 'retry_payment') || 'Retry Payment'}
+                                                    </Button>
+                                                )}
+                                                {(order.orderStatus === 'CREATED' || order.paymentStatus === 'AWAITING_PAYMENT_METHOD') && (
+                                                    <Button
+                                                        variant="outlined"
+                                                        color="error"
+                                                        size="small"
+                                                        startIcon={<CancelIcon />}
+                                                        onClick={() => handleCancelClick(order)}
+                                                    >
+                                                        {getTranslation(lang, 'cancel') || 'Cancel'}
+                                                    </Button>
+                                                )}
+                                            </Box>
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -402,6 +461,46 @@ const MyOrdersPage = () => {
                             }
                         </Button>
                     )}
+                </DialogActions>
+            </Dialog>
+
+            <Dialog open={cancelDialogOpen} onClose={() => !isCancelling && setCancelDialogOpen(false)} maxWidth="sm" fullWidth>
+                <DialogTitle>
+                    {getTranslation(lang, 'cancel_order') || 'Cancel Order'}
+                </DialogTitle>
+                <DialogContent>
+                    {orderToCancel && (
+                        <Box sx={{ bgcolor: 'background.default', p: 2, borderRadius: 1, mb: 3, border: 1, borderColor: 'divider' }}>
+                            <Typography variant="body2">
+                                <strong>{getTranslation(lang, 'order_id') || 'Order ID'}:</strong> #{orderToCancel.orderId}
+                            </Typography>
+                        </Box>
+                    )}
+                    {cancelError && (
+                        <Alert severity="error" sx={{ mb: 2 }}>{cancelError}</Alert>
+                    )}
+                    <TextField
+                        fullWidth
+                        multiline
+                        rows={3}
+                        label={getTranslation(lang, 'cancel_reason') || 'Reason for cancellation'}
+                        value={cancelReason}
+                        onChange={(e) => setCancelReason(e.target.value)}
+                        disabled={isCancelling}
+                    />
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={() => setCancelDialogOpen(false)} disabled={isCancelling}>
+                        {getTranslation(lang, 'go_back') || 'Go Back'}
+                    </Button>
+                    <Button onClick={handleConfirmCancel} variant="contained" color="error" disabled={isCancelling || !cancelReason.trim()}
+                        startIcon={isCancelling ? <CircularProgress size={20} /> : null}
+                    >
+                        {isCancelling
+                            ? (getTranslation(lang, 'cancelling') || 'Cancelling...')
+                            : (getTranslation(lang, 'confirm_cancel') || 'Confirm Cancel')
+                        }
+                    </Button>
                 </DialogActions>
             </Dialog>
         </Box>

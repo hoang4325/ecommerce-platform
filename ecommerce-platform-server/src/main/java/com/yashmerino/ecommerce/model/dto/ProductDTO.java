@@ -69,7 +69,12 @@ public class ProductDTO {
      */
     @NotNull(message = "price_is_required")
     @DecimalMin(value = "0.01", message = "price_value_error")
-    private Double price;
+    private java.math.BigDecimal price;
+
+    public void setPrice(Double price) {
+        this.price = price == null ? null : java.math.BigDecimal.valueOf(price).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+    public void setPrice(java.math.BigDecimal price) { this.price = price == null ? null : price.setScale(2, java.math.RoundingMode.HALF_UP); }
 
     /**
      * Product's categories.

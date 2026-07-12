@@ -2,9 +2,13 @@ package com.yashmerino.ecommerce.service.impl;
 
 import com.yashmerino.ecommerce.kafka.PaymentResultProducer;
 import com.yashmerino.ecommerce.kafka.events.PaymentRequestedEvent;
+import com.yashmerino.ecommerce.kafka.events.PaymentRequestedEventV2;
 import com.yashmerino.ecommerce.model.Payment;
+import com.yashmerino.ecommerce.model.operations.PaymentOperation;
 import com.yashmerino.ecommerce.model.stripe.StripePaymentResult;
+import com.yashmerino.ecommerce.repository.PaymentOperationRepository;
 import com.yashmerino.ecommerce.repository.PaymentRepository;
+import com.yashmerino.ecommerce.service.InboxService;
 import com.yashmerino.ecommerce.service.PaymentService;
 import com.yashmerino.ecommerce.service.StripePaymentService;
 import com.yashmerino.ecommerce.utils.PaymentStatus;
@@ -13,34 +17,19 @@ import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-/**
- * Payment service implementation.
- */
+import java.math.BigDecimal;
+
 @Service
 @AllArgsConstructor
 @Slf4j
 public class PaymentServiceImpl implements PaymentService {
 
-    /**
-     * Stripe payment service.
-     */
     private final StripePaymentService stripeService;
-
-    /**
-     * Payment repository.
-     */
     private final PaymentRepository paymentRepository;
-
-    /**
-     * Producer that produces Kafka payment result event.
-     */
     private final PaymentResultProducer resultProducer;
+    private final InboxService inboxService;
+    private final PaymentOperationRepository paymentOperationRepository;
 
-    /**
-     * Processes the payment.
-     *
-     * @param event is the event from Kafka topic.
-     */
     @Override
     @Transactional
     public void processPayment(PaymentRequestedEvent event) {
@@ -61,7 +50,6 @@ public class PaymentServiceImpl implements PaymentService {
 
             paymentRepository.save(payment);
 
-            // Send back the original paymentId from server, not the new ID from payment-service DB
             resultProducer.sendSucceeded(event.orderId(), event.paymentId());
             log.info("Payment processed successfully for order with ID {} (server payment ID: {})", event.orderId(), event.paymentId());
         } catch (Exception e) {
@@ -70,8 +58,41 @@ public class PaymentServiceImpl implements PaymentService {
                     new Payment(event.orderId(), null, event.amount(), PaymentStatus.FAILED)
             );
 
-            // Send back the original paymentId from server
             resultProducer.sendFailed(event.orderId(), event.paymentId(), e.getMessage());
         }
+    }
+
+    @Override
+    @Transactional
+    public void processPaymentV2(PaymentRequestedEventV2 event) {
+        String consumerName = "payment-service";
+        if (inboxService.isAlreadyProcessed(consumerName, event.eventId())) {
+            log.info("Event {} already processed, skipping", event.eventId());
+            return;
+        }
+
+        var existing = paymentOperationRepository.findByMainPaymentId(event.paymentId());
+        if (existing.isPresent()) {
+            PaymentOperation operation = existing.get();
+            boolean same = operation.getOrderId().equals(event.orderId())
+                    && operation.getAmount().compareTo(new BigDecimal(event.amount())) == 0
+                    && operation.getCurrency().equals(event.currency())
+                    && operation.getRequestIdempotencyKey().equals(event.idempotencyKey());
+            if (!same) throw new IllegalStateException("payment_business_idempotency_conflict");
+            inboxService.markProcessed(consumerName, event.eventId(), event.eventType(), event.correlationId(), event.aggregateId());
+            return;
+        }
+        PaymentOperation operation = new PaymentOperation();
+        operation.setMainPaymentId(event.paymentId());
+        operation.setOrderId(event.orderId());
+        operation.setAmount(new BigDecimal(event.amount()));
+        operation.setCurrency(event.currency());
+        operation.setPaymentMethodRef(event.paymentMethodId());
+        operation.setRequestIdempotencyKey(event.idempotencyKey());
+        paymentOperationRepository.save(operation);
+
+        inboxService.markProcessed(consumerName, event.eventId(), event.eventType(),
+                event.correlationId(), event.aggregateId());
+        log.info("V2 payment request received for payment ID {}", event.paymentId());
     }
 }

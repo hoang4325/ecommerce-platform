@@ -36,6 +36,7 @@ import lombok.Setter;
 
 import java.util.HashSet;
 import java.util.Set;
+import java.math.BigDecimal;
 
 /**
  * JPA Entity for a product.
@@ -56,7 +57,25 @@ public class Product extends BaseEntity {
     /**
      * Product's price.
      */
-    private Double price;
+    @Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal price;
+
+    @Column(nullable = false)
+    private Integer onHandQuantity = 0;
+
+    @Column(nullable = false)
+    private Integer reservedQuantity = 0;
+
+    @Column(nullable = false)
+    private Boolean active = true;
+
+    @Version
+    private Long version;
+
+    public void setPrice(Double price) {
+        this.price = price == null ? null : BigDecimal.valueOf(price).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+    public void setPrice(BigDecimal price) { this.price = price == null ? null : price.setScale(2, java.math.RoundingMode.HALF_UP); }
 
     /**
      * Product's description;

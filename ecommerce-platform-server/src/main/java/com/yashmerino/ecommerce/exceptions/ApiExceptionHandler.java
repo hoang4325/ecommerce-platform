@@ -47,6 +47,24 @@ import java.util.List;
 @Validated
 public class ApiExceptionHandler {
 
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<CustomErrorResponse> conflict(ConflictException e) {
+        CustomErrorResponse error = new CustomErrorResponse();
+        error.setTimestamp(LocalDateTime.now());
+        error.setError(e.getMessage());
+        error.setStatus(HttpStatus.CONFLICT.value());
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
+    }
+
+    @ExceptionHandler({InsufficientStockException.class, InsufficientPointsException.class})
+    public ResponseEntity<CustomErrorResponse> unprocessable(RuntimeException e) {
+        CustomErrorResponse error = new CustomErrorResponse();
+        error.setTimestamp(LocalDateTime.now());
+        error.setError(e.getMessage());
+        error.setStatus(HttpStatus.UNPROCESSABLE_ENTITY.value());
+        return new ResponseEntity<>(error, HttpStatus.UNPROCESSABLE_ENTITY);
+    }
+
     /**
      * Handles the {@link ConstraintViolationException}
      *

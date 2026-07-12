@@ -56,6 +56,6 @@ class SecurityTest {
      */
     @Test
     void anyRequestIsSecuredTest() throws Exception {
-        mvc.perform(delete("/api/cartItem/1")).andExpect(status().isForbidden());
+        mvc.perform(delete("/api/cartItem/1")).andExpect(status().isUnauthorized());
     }
 }

@@ -1,0 +1,7 @@
+com/yashmerino/ecommerce/service/impl/UserRegisteredTemplateTest.class
+com/yashmerino/ecommerce/service/impl/PaymentFailedTemplateTest.class
+com/yashmerino/ecommerce/service/impl/PaymentSuccessTemplateTest.class
+com/yashmerino/ecommerce/kafka/NotificationEventListenerTest.class
+com/yashmerino/ecommerce/service/impl/NotificationServiceImplTest.class
+com/yashmerino/ecommerce/service/impl/EmailNotificationSenderTest.class
+com/yashmerino/ecommerce/service/NotificationSenderFactoryTest.class

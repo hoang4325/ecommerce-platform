@@ -93,11 +93,13 @@ public class SecurityConfig {
      * Regex for all the endpoints related to orders.
      */
     private static final String ORDERS_ALL_ENDPOINTS = "/api/order/**";
+    private static final String ORDERS_V2_ALL_ENDPOINTS = "/api/orders/**";
 
     /**
      * Regex for all the endpoints related to payments.
      */
     private static final String PAYMENTS_ALL_ENDPOINTS = "/api/payment/**";
+    private static final String PAYMENTS_V2_ALL_ENDPOINTS = "/api/payments/**";
 
     /**
      * Regex for all the endpoints related to users.
@@ -167,6 +169,8 @@ public class SecurityConfig {
                         .requestMatchers(CART_ITEMS_ALL_ENDPOINTS).hasAnyAuthority(Role.SELLER.name(), Role.USER.name())
                         .requestMatchers(ORDERS_ALL_ENDPOINTS).hasAnyAuthority(Role.USER.name())
                         .requestMatchers(PAYMENTS_ALL_ENDPOINTS).hasAnyAuthority(Role.USER.name())
+                        .requestMatchers(ORDERS_V2_ALL_ENDPOINTS).hasAuthority(Role.USER.name())
+                        .requestMatchers(PAYMENTS_V2_ALL_ENDPOINTS).hasAuthority(Role.USER.name())
                         .requestMatchers(CARTS_ALL_ENDPOINTS).hasAnyAuthority(Role.USER.name())
                         .requestMatchers(HttpMethod.POST, PRODUCTS_ALL_ENDPOINTS).hasAuthority(Role.SELLER.name())
                         .requestMatchers(HttpMethod.PUT, PRODUCTS_ALL_ENDPOINTS).hasAuthority(Role.SELLER.name())

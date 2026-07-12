@@ -2,6 +2,7 @@ package com.yashmerino.ecommerce.kafka;
 
 import com.yashmerino.ecommerce.kafka.events.PaymentRequestedEvent;
 import com.yashmerino.ecommerce.service.PaymentService;
+import com.yashmerino.ecommerce.service.RefundWorker;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,11 +22,14 @@ class PaymentEventListenerTest {
     @Mock
     private PaymentService paymentService;
 
+    @Mock
+    private RefundWorker refundWorker;
+
     private PaymentEventListener listener;
 
     @BeforeEach
     void setUp() {
-        listener = new PaymentEventListener(paymentService);
+        listener = new PaymentEventListener(paymentService, refundWorker);
     }
 
     @Test

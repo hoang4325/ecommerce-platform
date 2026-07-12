@@ -184,8 +184,8 @@ public class CartItemServiceImpl implements CartItemService {
         }
 
 
-        Double total = cartItemRepository.getTotalPriceByUsername(username);
-        return total != null ? total : 0.0;
+        java.math.BigDecimal total = cartItemRepository.getTotalPriceByUsername(username);
+        return total != null ? total.doubleValue() : 0.0;
     }
 
     /**

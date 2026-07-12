@@ -1,6 +1,7 @@
 package com.yashmerino.ecommerce.kafka;
 
 import com.yashmerino.ecommerce.kafka.events.NotificationRequestedEvent;
+import com.yashmerino.ecommerce.kafka.events.NotificationRequestedEventV2;
 import com.yashmerino.ecommerce.service.NotificationService;
 import com.yashmerino.ecommerce.utils.ContactType;
 import com.yashmerino.ecommerce.utils.NotificationType;
@@ -110,5 +111,34 @@ class NotificationEventListenerTest {
 
         // Assert
         verify(notificationService, times(3)).sendNotification(testEvent);
+    }
+
+    @Test
+    void testOnNotificationRequestedV2DelegatesToService() {
+        NotificationRequestedEventV2 v2Event = new NotificationRequestedEventV2(
+                "event-1", "ORDER_CREATED", 2, "2026-07-11T10:00:00",
+                "corr-1", 123L, "order-service", "idem-1",
+                "PAYMENT_SUCCESS", "EMAIL", "test@example.com", Map.of()
+        );
+        doNothing().when(notificationService).sendNotificationV2(any(NotificationRequestedEventV2.class));
+
+        listener.onNotificationRequestedV2(v2Event);
+
+        verify(notificationService, times(1)).sendNotificationV2(v2Event);
+    }
+
+    @Test
+    void testOnNotificationRequestedV2ThrowsOnError() {
+        NotificationRequestedEventV2 v2Event = new NotificationRequestedEventV2(
+                "event-1", "ORDER_CREATED", 2, "2026-07-11T10:00:00",
+                "corr-1", 123L, "order-service", "idem-1",
+                "PAYMENT_SUCCESS", "EMAIL", "test@example.com", Map.of()
+        );
+        doThrow(new RuntimeException("V2 error"))
+                .when(notificationService).sendNotificationV2(any(NotificationRequestedEventV2.class));
+
+        assertThrows(RuntimeException.class, () -> listener.onNotificationRequestedV2(v2Event));
+
+        verify(notificationService, times(1)).sendNotificationV2(v2Event);
     }
 }

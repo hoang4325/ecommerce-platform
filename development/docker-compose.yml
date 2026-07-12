@@ -41,7 +41,7 @@ services:
     image: mysql:8.0
     container_name: mysql
     ports:
-      - "3306:3306"
+      - "3307:3306"
     environment:
       MYSQL_ROOT_PASSWORD: "123"
     volumes:
@@ -93,7 +93,7 @@ services:
       # Swagger
       - SPRINGDOC_SWAGGER_UI_TAGS_SORTER=alpha
       # JWT
-      - JWT_SECRET=YOUR_JWT_SECRET
+      - jwt.secret=KyBIBfN31F/fA78lWaN1jDg4AbVYR5lBAG148Q/vcOUyzUD/feWR8y2eAdsk8Ng/UjDPmqXzRJ+dyTlO9aBx1w==
       # Kafka
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - SPRING_KAFKA_CONSUMER_GROUP_ID=main-server

@@ -31,8 +31,8 @@ import Header from '../../Header';
 import Copyright from '../../footer/Copyright';
 import CartItemCard from './CartItemCard';
 import { getCartItems } from '../../../api/CartItemsRequest';
-import { createOrder } from '../../../api/OrderRequest';
-import { processPayment } from '../../../api/PaymentRequest';
+import { submitCheckout } from '../../../api/CheckoutRequest';
+import { initiatePayment } from '../../../api/PaymentInitiationRequest';
 import { clearCart } from '../../../api/CartRequest';
 import { useAppSelector } from '../../../hooks';
 import { getTranslation } from '../../../../i18n/i18n';
@@ -134,6 +134,8 @@ const CartContainer = () => {
   const [cardHolder, setCardHolder] = React.useState<string>('');
 
   const [isLoading, setIsLoading] = React.useState<boolean>(false);
+  const [isCheckoutInProgress, setIsCheckoutInProgress] = React.useState<boolean>(false);
+  const [isPaymentInProgress, setIsPaymentInProgress] = React.useState<boolean>(false);
   const [error, setError] = React.useState<string | null>(null);
   const [success, setSuccess] = React.useState<string | null>(null);
 
@@ -149,7 +151,6 @@ const CartContainer = () => {
         return;
       }
 
-      // Validate cardholder name
       if (!cardHolder || !cardHolder.trim()) {
         setError(getTranslation(lang, "fill_card_details") || "Please enter cardholder name");
         setIsLoading(false);
@@ -159,23 +160,20 @@ const CartContainer = () => {
       if (!stripe || !elements || !cardElement) {
         setError("Payment form not ready. Please refresh the page and try again.");
         setIsLoading(false);
-        console.error('Stripe not ready:', { stripe: !!stripe, elements: !!elements, cardElement: !!cardElement });
         return;
       }
 
-      // Verify CardElement is mounted in DOM
       const cardElementContainer = document.getElementById('card-element');
       if (!cardElementContainer || cardElementContainer.children.length === 0) {
         setError("Payment form not fully loaded. Please wait a moment and try again.");
         setIsLoading(false);
-        console.error('CardElement not mounted in DOM');
         return;
       }
 
-      // Step 1: Create Stripe Payment Method using CardElement
+      const idempotencyKey = crypto.randomUUID();
+
       let stripePaymentMethodId = '';
       try {
-        console.log('Creating payment method with cardElement:', cardElement);
         const { paymentMethod, error } = await stripe.createPaymentMethod({
           type: 'card',
           card: cardElement,
@@ -185,7 +183,6 @@ const CartContainer = () => {
         });
 
         if (error) {
-          console.error('Payment method error:', error);
           setError(error.message || getTranslation(lang, "payment_method_creation_failed") || "Failed to create payment method");
           setIsLoading(false);
           return;
@@ -194,50 +191,48 @@ const CartContainer = () => {
         stripePaymentMethodId = paymentMethod.id;
       } catch (stripeError) {
         setError(getTranslation(lang, "stripe_error") || "Stripe error occurred");
-        console.error('Stripe error:', stripeError);
         setIsLoading(false);
         return;
       }
 
-      // Step 2: Create Order
-      const orderResponse = await createOrder({
-        totalAmount: total,
-        status: 'CREATED'
+      setIsCheckoutInProgress(true);
+
+      const checkoutResponse = await submitCheckout(idempotencyKey, {
+        requestedPoints: 0,
+        couponCode: null,
+        currency: "EUR",
       });
 
-      if (!orderResponse.id) {
+      if (!checkoutResponse.orderId) {
         setError(getTranslation(lang, "order_creation_failed") || "Failed to create order");
         setIsLoading(false);
+        setIsCheckoutInProgress(false);
         return;
       }
 
-      const orderId = orderResponse.id;
+      setIsCheckoutInProgress(false);
+      setIsPaymentInProgress(true);
 
-      // Step 3: Process Payment with real Stripe Payment Method ID
-      const paymentResponse = await processPayment(orderId, {
-        orderId: orderId,
-        amount: total,
-        stripeToken: stripePaymentMethodId,
+      const initiationResponse = await initiatePayment(checkoutResponse.paymentId, idempotencyKey, {
+        paymentMethodId: stripePaymentMethodId,
       });
 
-      if (paymentResponse.status !== 200) {
+      if (!initiationResponse.paymentId) {
         setError(getTranslation(lang, "payment_failed") || "Payment processing failed");
         setIsLoading(false);
+        setIsPaymentInProgress(false);
         return;
       }
 
-      // Step 4: Clear Cart after successful payment
       await clearCart();
 
       setSuccess(getTranslation(lang, "order_placed_successfully") || "Order placed successfully!");
-      
-      // Reset form
+
       setCardHolder('');
       if (cardElement) {
         cardElement.clear();
       }
 
-      // Reset pagination
       setPagination({
         data: [],
         currentPage: 0,
@@ -253,6 +248,8 @@ const CartContainer = () => {
       console.error(err);
     } finally {
       setIsLoading(false);
+      setIsCheckoutInProgress(false);
+      setIsPaymentInProgress(false);
     }
   };
 

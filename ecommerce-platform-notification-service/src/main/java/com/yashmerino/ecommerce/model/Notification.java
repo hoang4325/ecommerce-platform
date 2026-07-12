@@ -49,5 +49,17 @@ public class Notification extends BaseEntity {
     @Column(length = 500)
     private String lastError;
 
+    @Column(name = "event_id", length = 36)
+    private String eventId;
+
+    @Column(name = "business_idempotency_key", length = 255)
+    private String businessIdempotencyKey;
+
+    @Column(name = "claimed_by", length = 255)
+    private String claimedBy;
+
+    @Column(name = "claimed_at")
+    private LocalDateTime claimedAt;
+
     private LocalDateTime sentAt;
 }

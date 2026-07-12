@@ -40,7 +40,7 @@ public interface CartItemRepository extends JpaRepository<CartItem, Long> {
     Page<CartItem> findAllByCartUserUsername(String username, Pageable pageable);
 
     @Query("SELECT SUM(c.price * c.quantity) FROM cart_items c WHERE c.cart.user.username = :username")
-    Double getTotalPriceByUsername(@Param("username") String username);
+    java.math.BigDecimal getTotalPriceByUsername(@Param("username") String username);
 
     void deleteByCartId(final Long cartId);
 }

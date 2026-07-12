@@ -34,6 +34,7 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import java.math.BigDecimal;
 
 /**
  * JPA Entity for cart's item.
@@ -62,7 +63,13 @@ public class CartItem extends BaseEntity {
     /**
      * Cart Item's price.
      */
-    private Double price;
+    @jakarta.persistence.Column(nullable = false, precision = 19, scale = 2)
+    private BigDecimal price;
+
+    public void setPrice(Double price) {
+        this.price = price == null ? null : BigDecimal.valueOf(price).setScale(2, java.math.RoundingMode.HALF_UP);
+    }
+    public void setPrice(BigDecimal price) { this.price = price == null ? null : price.setScale(2, java.math.RoundingMode.HALF_UP); }
 
     /**
      * The cart item's cart.

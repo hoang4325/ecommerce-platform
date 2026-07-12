@@ -22,6 +22,12 @@ import java.math.BigDecimal;
 @Table(name = "payments")
 public class Payment extends BaseEntity {
 
+    public Payment(Order order, BigDecimal amount, PaymentStatus status) {
+        this.order = order;
+        this.amount = amount;
+        this.status = status;
+    }
+
     /**
      * Payment's order ID.
      */
@@ -42,4 +48,10 @@ public class Payment extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private PaymentStatus status;
+
+    @Column(nullable = false, columnDefinition = "CHAR(3)")
+    private String currency = "EUR";
+    private String externalPaymentId;
+    @Version
+    private Long version;
 }

@@ -28,6 +28,7 @@ import com.yashmerino.ecommerce.model.Cart;
 import com.yashmerino.ecommerce.model.CartItem;
 import com.yashmerino.ecommerce.model.Product;
 import com.yashmerino.ecommerce.model.User;
+import java.math.BigDecimal;
 import com.yashmerino.ecommerce.model.dto.ProductDTO;
 import com.yashmerino.ecommerce.repositories.CartItemRepository;
 import com.yashmerino.ecommerce.repositories.ProductRepository;
@@ -110,7 +111,7 @@ class ProductServiceImplTest {
         Product result = productService.getProduct(1L);
         assertNotNull(result);
         assertEquals("Test Product", result.getName());
-        assertEquals(99.99, result.getPrice());
+        assertEquals(0, BigDecimal.valueOf(99.99).compareTo(result.getPrice()));
         verify(productRepository, times(1)).findById(1L);
     }
 
@@ -223,7 +224,7 @@ class ProductServiceImplTest {
         CartItem savedCartItem = cartItemCaptor.getValue();
         assertEquals(2, savedCartItem.getQuantity());
         assertEquals("Test Product", savedCartItem.getName());
-        assertEquals(99.99, savedCartItem.getPrice());
+        assertEquals(0, BigDecimal.valueOf(99.99).compareTo(savedCartItem.getPrice()));
         assertEquals(testProduct, savedCartItem.getProduct());
         assertEquals(testCart, savedCartItem.getCart());
     }

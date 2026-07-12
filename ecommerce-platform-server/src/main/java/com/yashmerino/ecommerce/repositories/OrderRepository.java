@@ -25,9 +25,13 @@ package com.yashmerino.ecommerce.repositories;
  +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
 
 import com.yashmerino.ecommerce.model.Order;
+import com.yashmerino.ecommerce.utils.OrderStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 /**
@@ -43,4 +47,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
      * @return page of orders
      */
     Page<Order> findByUserIdOrderByCreatedAtDesc(Long userId, Pageable pageable);
+
+    @Modifying
+    @Query("UPDATE orders o SET o.status = :newStatus, o.version = o.version + 1 WHERE o.id = :id AND o.status = :currentStatus AND o.version = :version")
+    int updateOrderStatusAndVersion(@Param("id") Long id, @Param("currentStatus") OrderStatus currentStatus, @Param("newStatus") OrderStatus newStatus, @Param("version") Long version);
 }

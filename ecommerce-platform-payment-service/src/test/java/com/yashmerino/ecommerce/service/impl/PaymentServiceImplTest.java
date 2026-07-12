@@ -6,7 +6,9 @@ import com.yashmerino.ecommerce.kafka.PaymentResultProducer;
 import com.yashmerino.ecommerce.kafka.events.PaymentRequestedEvent;
 import com.yashmerino.ecommerce.model.Payment;
 import com.yashmerino.ecommerce.model.stripe.StripePaymentResult;
+import com.yashmerino.ecommerce.repository.PaymentOperationRepository;
 import com.yashmerino.ecommerce.repository.PaymentRepository;
+import com.yashmerino.ecommerce.service.InboxService;
 import com.yashmerino.ecommerce.service.StripePaymentService;
 import com.yashmerino.ecommerce.utils.PaymentStatus;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,11 +39,17 @@ class PaymentServiceImplTest {
     @Mock
     private PaymentResultProducer resultProducer;
 
+    @Mock
+    private InboxService inboxService;
+
+    @Mock
+    private PaymentOperationRepository paymentOperationRepository;
+
     private PaymentServiceImpl paymentService;
 
     @BeforeEach
     void setUp() {
-        paymentService = new PaymentServiceImpl(stripePaymentService, paymentRepository, resultProducer);
+        paymentService = new PaymentServiceImpl(stripePaymentService, paymentRepository, resultProducer, inboxService, paymentOperationRepository);
     }
 
     @Test

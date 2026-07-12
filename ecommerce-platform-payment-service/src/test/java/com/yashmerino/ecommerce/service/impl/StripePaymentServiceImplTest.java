@@ -1,13 +1,20 @@
 package com.yashmerino.ecommerce.service.impl;
 
 import com.stripe.exception.StripeException;
+import com.stripe.model.Refund;
+import com.stripe.net.RequestOptions;
+import com.stripe.param.RefundCreateParams;
 import com.yashmerino.ecommerce.model.stripe.StripePaymentResult;
+import com.yashmerino.ecommerce.model.stripe.StripeRefundResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
 
 import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
 
 /**
  * Unit tests for StripePaymentServiceImpl.
@@ -52,6 +59,48 @@ class StripePaymentServiceImplTest {
         } catch (Exception e) {
             // Expected when Stripe is not configured
             assertTrue(e instanceof StripeException || e.getMessage().contains("api"));
+        }
+    }
+
+    @Test
+    void testRefundSuccess() throws StripeException {
+        Refund mockRefund = mock(Refund.class);
+        when(mockRefund.getId()).thenReturn("re_123");
+        when(mockRefund.getStatus()).thenReturn("succeeded");
+        when(mockRefund.getFailureReason()).thenReturn(null);
+
+        try (MockedStatic<Refund> refundMock = mockStatic(Refund.class)) {
+            refundMock.when(() -> Refund.create(any(RefundCreateParams.class), any(RequestOptions.class)))
+                    .thenReturn(mockRefund);
+
+            StripeRefundResult result = stripePaymentService.refund(
+                    "pi_123", new BigDecimal("25.00"), "idem-1");
+
+            assertEquals("re_123", result.getStripeRefundId());
+            assertEquals("succeeded", result.getStatus());
+            assertNull(result.getFailureCode());
+            assertNull(result.getFailureMessage());
+        }
+    }
+
+    @Test
+    void testRefundFailure() throws StripeException {
+        Refund mockRefund = mock(Refund.class);
+        when(mockRefund.getId()).thenReturn("re_123");
+        when(mockRefund.getStatus()).thenReturn("failed");
+        when(mockRefund.getFailureReason()).thenReturn("insufficient_funds");
+
+        try (MockedStatic<Refund> refundMock = mockStatic(Refund.class)) {
+            refundMock.when(() -> Refund.create(any(RefundCreateParams.class), any(RequestOptions.class)))
+                    .thenReturn(mockRefund);
+
+            StripeRefundResult result = stripePaymentService.refund(
+                    "pi_123", new BigDecimal("25.00"), "idem-1");
+
+            assertEquals("re_123", result.getStripeRefundId());
+            assertEquals("failed", result.getStatus());
+            assertEquals("insufficient_funds", result.getFailureCode());
+            assertEquals("insufficient_funds", result.getFailureMessage());
         }
     }
 }
