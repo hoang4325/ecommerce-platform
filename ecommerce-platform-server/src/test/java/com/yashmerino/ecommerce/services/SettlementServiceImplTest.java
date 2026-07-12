@@ -125,9 +125,10 @@ class SettlementServiceImplTest {
             return saved;
         });
 
-        lenient().when(settlementRepository.findByPartnerId(eq(PARTNER_ID), any(Pageable.class))).thenReturn(Page.empty());
+        lenient().when(settlementRepository.findByPartnerIdAndCurrency(eq(PARTNER_ID), anyString(), any(Pageable.class))).thenReturn(Page.empty());
         lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
+        lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
         lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of(po1, po2));
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
@@ -153,9 +154,10 @@ class SettlementServiceImplTest {
             return saved;
         });
 
-        lenient().when(settlementRepository.findByPartnerId(eq(PARTNER_ID), any(Pageable.class))).thenReturn(Page.empty());
+        lenient().when(settlementRepository.findByPartnerIdAndCurrency(eq(PARTNER_ID), anyString(), any(Pageable.class))).thenReturn(Page.empty());
         lenient().when(settlementRepository.findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(Optional.empty());
+        lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
         lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
                 eq(PARTNER_ID), any(), any(), any())).thenReturn(List.of());
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());

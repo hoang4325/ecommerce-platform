@@ -14,6 +14,8 @@ public interface SettlementRepository extends JpaRepository<Settlement, Long> {
 
     Page<Settlement> findByPartnerId(Long partnerId, Pageable pageable);
 
+    Page<Settlement> findByPartnerIdAndCurrency(Long partnerId, String currency, Pageable pageable);
+
     Optional<Settlement> findByIdAndPartnerId(Long id, Long partnerId);
 
     Page<Settlement> findByStatus(SettlementStatus status, Pageable pageable);

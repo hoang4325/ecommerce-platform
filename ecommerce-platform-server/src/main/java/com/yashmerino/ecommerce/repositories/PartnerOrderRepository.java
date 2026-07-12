@@ -2,9 +2,11 @@ package com.yashmerino.ecommerce.repositories;
 
 import com.yashmerino.ecommerce.model.order.PartnerOrder;
 import com.yashmerino.ecommerce.model.order.PartnerOrderStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -31,6 +33,7 @@ public interface PartnerOrderRepository extends JpaRepository<PartnerOrder, Long
             @Param("periodStart") LocalDateTime periodStart,
             @Param("periodEnd") LocalDateTime periodEnd);
 
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT po FROM PartnerOrder po WHERE po.partner.id = :partnerId AND po.status = :status AND po.settlementStatus = 'UNSETTLED' AND po.deliveredAt >= :periodStart AND po.deliveredAt < :periodEnd")
     List<PartnerOrder> findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
             @Param("partnerId") Long partnerId,

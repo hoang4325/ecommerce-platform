@@ -51,11 +51,11 @@ public class SettlementServiceImpl implements SettlementService {
     }
 
     private SettlementResponse doCalculateSettlement(Long partnerId, LocalDateTime periodStart,
-                                                       LocalDateTime periodEnd, String currency) {
+                                                        LocalDateTime periodEnd, String currency) {
         String resolvedCurrency = currency != null ? currency : "USD";
 
-        // Period overlap check: reject if any non-OPEN settlement overlaps
-        List<Settlement> existing = settlementRepository.findByPartnerId(partnerId, Pageable.unpaged()).getContent();
+        // Period overlap check: filter by currency to avoid false rejection across currencies
+        List<Settlement> existing = settlementRepository.findByPartnerIdAndCurrency(partnerId, resolvedCurrency, Pageable.unpaged()).getContent();
         for (Settlement s : existing) {
             if (s.getStatus() == SettlementStatus.OPEN) continue;
             if (periodStart.isBefore(s.getPeriodEnd()) && periodEnd.isAfter(s.getPeriodStart())) {
@@ -63,27 +63,31 @@ public class SettlementServiceImpl implements SettlementService {
             }
         }
 
-        Settlement settlement = settlementRepository
-                .findByPartnerIdAndPeriodStartAndPeriodEndAndCurrency(partnerId, periodStart, periodEnd, resolvedCurrency)
-                .orElse(null);
+        // Atomic creation: use INSERT ... ON DUPLICATE KEY UPDATE via JDBC to prevent race
+        Long settlementId = jdbc.query(
+                "SELECT id FROM settlements WHERE partner_id=? AND period_start=? AND period_end=? AND currency=? FOR UPDATE",
+                rs -> rs.next() ? rs.getLong("id") : null,
+                partnerId, periodStart, periodEnd, resolvedCurrency);
 
-        if (settlement != null) {
-            // ONCE policy: do not recalculate CALCULATED settlements
+        Settlement settlement;
+        if (settlementId != null) {
+            settlement = settlementRepository.findById(settlementId)
+                    .orElseThrow(() -> new IllegalStateException("settlement_vanished_after_lock"));
             if (settlement.getStatus() == SettlementStatus.CALCULATED
                     || settlement.getStatus() == SettlementStatus.UNDER_REVIEW
                     || settlement.getStatus() == SettlementStatus.APPROVED
                     || settlement.getStatus() == SettlementStatus.PAID) {
                 throw new ConflictException("settlement_already_calculated");
             }
-        }
-
-        if (settlement == null) {
+        } else {
             settlement = new Settlement();
             settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
             settlement.getPartner().setId(partnerId);
             settlement.setPeriodStart(periodStart);
             settlement.setPeriodEnd(periodEnd);
             settlement.setCurrency(resolvedCurrency);
+            settlement.setStatus(SettlementStatus.OPEN);
+            settlement = settlementRepository.save(settlement);
         }
 
         settlement.setStatus(SettlementStatus.CALCULATED);
