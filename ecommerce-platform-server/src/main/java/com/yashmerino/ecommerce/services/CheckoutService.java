@@ -96,7 +96,8 @@ public class CheckoutService {
                 "       ci.offer_id," +
                 "       po.partner_id AS partner_id," +
                 "       po.partner_sku AS partner_sku," +
-                "       COALESCE(pr.business_name, pr.name) AS partner_name " +
+                "       COALESCE(pr.business_name, pr.name) AS partner_name," +
+                "       po.product_id AS offer_product_id " +
                 "FROM cart_items ci " +
                 "JOIN products p ON p.id=ci.product_id " +
                 "LEFT JOIN partner_offers po ON po.id=ci.offer_id " +
@@ -106,13 +107,16 @@ public class CheckoutService {
                         rs.getLong(1), rs.getString(2), rs.getBigDecimal(3), rs.getInt(4),
                         rs.getInt(5), rs.getInt(6), rs.getBoolean(7),
                         rs.getObject(8, Long.class), rs.getObject(9, Long.class),
-                        rs.getString(10), rs.getString(11)),
+                        rs.getString(10), rs.getString(11), rs.getObject(12, Long.class)),
                 user.getCart().getId());
-        // Validate: for offer items, ci.product_id must equal po.product_id
-        // and partner must be resolveable
         for (CartLine line : lines) {
-            if (line.offerId() != null && line.partnerId() == null) {
-                throw new ConflictException("offer_partner_not_found");
+            if (line.offerId() != null) {
+                if (line.partnerId() == null) {
+                    throw new ConflictException("offer_partner_not_found");
+                }
+                if (line.offerProductId() != null && !line.offerProductId().equals(line.productId())) {
+                    throw new ConflictException("offer_product_mismatch");
+                }
             }
         }
         if (lines.isEmpty()) throw new ConflictException("cart_is_empty");
@@ -149,9 +153,9 @@ public class CheckoutService {
         for (CartLine line : lines) {
             BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
             BigDecimal qualifying = lineTotal;
-            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift,currency,partner_name) VALUES (?,?,?,?,?,?,?,?,?,false,?,?)",
+            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift,currency,partner_name,partner_sku) VALUES (?,?,?,?,?,?,?,?,?,false,?,?,?)",
                     order.getId(), line.productId(), line.offerId(), line.partnerId(), line.name(),
-                    money(line.price()), line.quantity(), lineTotal, qualifying, currency, line.partnerName());
+                    money(line.price()), line.quantity(), lineTotal, qualifying, currency, line.partnerName(), line.partnerSku());
             if (line.offerId() != null) {
                 int changed = jdbc.update(
                         "UPDATE partner_offers SET reserved_quantity=reserved_quantity+?,version=version+1 " +
@@ -487,7 +491,7 @@ public class CheckoutService {
                     "SUM(commission_amount) AS total_commission," +
                     "SUM(partner_payable_amount) AS total_payable,currency " +
                     "FROM order_items WHERE order_id=? AND partner_id IS NOT NULL " +
-                    "GROUP BY partner_id FOR UPDATE",
+                    "GROUP BY partner_id, currency FOR UPDATE",
                 rs -> {
                     while (rs.next()) {
                         Long partnerId = rs.getLong("partner_id");
@@ -584,7 +588,7 @@ public class CheckoutService {
     }
 
     private record RequestRow(String hash, String status, String response) {}
-    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active, Long offerId, Long partnerId, String partnerSku, String partnerName) {}
+    private record CartLine(long productId, String name, BigDecimal price, int quantity, int onHand, int reserved, boolean active, Long offerId, Long partnerId, String partnerSku, String partnerName, Long offerProductId) {}
     private record Promotion(long id, BigDecimal discount) {}
     private record Account(long id, int available, int reserved) {}
     private record Lot(long id, int remaining) {}
