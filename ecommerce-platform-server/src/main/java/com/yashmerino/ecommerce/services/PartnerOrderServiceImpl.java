@@ -39,10 +39,12 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
 
     private static final RowMapper<PartnerOrderRow> ROW_MAPPER = (rs, n) -> {
         PartnerOrderStatus status;
+        String rawStatus = rs.getString("status");
+        if (rawStatus == null) throw new IllegalStateException("partner_order_status_is_null for id=" + rs.getLong("id"));
         try {
-            status = PartnerOrderStatus.valueOf(rs.getString("status"));
+            status = PartnerOrderStatus.valueOf(rawStatus);
         } catch (IllegalArgumentException e) {
-            status = PartnerOrderStatus.NEW;
+            throw new IllegalStateException("Unknown partner_order_status '" + rawStatus + "' for id=" + rs.getLong("id"), e);
         }
         return new PartnerOrderRow(
                 rs.getLong("id"),
