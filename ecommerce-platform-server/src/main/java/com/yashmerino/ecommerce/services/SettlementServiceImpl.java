@@ -62,7 +62,8 @@ public class SettlementServiceImpl implements SettlementService {
                 throw new ConflictException("settlement_already_finalized");
             }
             if (settlement.getStatus() == SettlementStatus.CALCULATED || settlement.getStatus() == SettlementStatus.OPEN) {
-                settlementLineRepository.deleteBySettlementId(settlement.getId());
+                // Preserve ADJUSTMENT lines; delete only auto-generated SALE lines
+                settlementLineRepository.deleteBySettlementIdAndLineType(settlement.getId(), "SALE");
                 settlementLineRepository.flush();
             }
         }
@@ -79,8 +80,9 @@ public class SettlementServiceImpl implements SettlementService {
         settlement.setStatus(SettlementStatus.CALCULATED);
         settlement = settlementRepository.save(settlement);
 
+        // Atomic claim: lock only UNSETTLED DELIVERED orders within the period
         List<PartnerOrder> deliveredOrders = partnerOrderRepository
-                .findByPartnerIdAndStatusAndDeliveredAtInRange(
+                .findByPartnerIdAndStatusAndDeliveredAtInRangeAndUnsettledForUpdate(
                         partnerId, PartnerOrderStatus.DELIVERED, periodStart, periodEnd);
 
         BigDecimal grossSales = BigDecimal.ZERO;
