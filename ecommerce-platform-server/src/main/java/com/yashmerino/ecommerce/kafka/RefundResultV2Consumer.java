@@ -96,6 +96,16 @@ public class RefundResultV2Consumer {
                 userId, refund.getOrderId(), refund.getId(), refund.getAmount().negate(), refund.getCurrency(), refund.getExternalRefundId(), "spend:refund:" + refund.getId());
 
         // PartnerOrder settlement reversal
+        // Load all DELIVERED partner orders for this order, with their settlement info
+        String carryForwardSql =
+            "INSERT INTO pending_settlement_adjustments(partner_id,partner_order_id,refund_id,order_id,amount,currency,idempotency_key) " +
+            "VALUES (?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id";
+        String refundLineSql =
+            "INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
+            "VALUES (?,?,'REFUND',?,?,?,?,?,?,'Refund reversal',?) ON DUPLICATE KEY UPDATE id=id";
+        String updateSettlementSql =
+            "UPDATE settlements SET refund_amount=refund_amount+?,payable_amount=payable_amount-?,version=version+1 WHERE id=?";
+
         jdbc.query("SELECT po.id,po.partner_id,po.subtotal,po.commission_amount,po.settlement_id,po.settlement_status,s.status AS set_status " +
                     "FROM partner_orders po LEFT JOIN settlements s ON s.id=po.settlement_id " +
                     "WHERE po.order_id=? AND po.status='DELIVERED' FOR UPDATE",
@@ -103,32 +113,29 @@ public class RefundResultV2Consumer {
                     while (poRs.next()) {
                         Long partnerOrderId = poRs.getLong("id");
                         Long partnerId = poRs.getLong("partner_id");
-                        BigDecimal subtotal = poRs.getBigDecimal("subtotal");
-                        BigDecimal commissionAmount = poRs.getBigDecimal("commission_amount");
                         String settlementStatus = poRs.getString("settlement_status");
                         String settlementState = poRs.getString("set_status");
 
                         String idempotencyKey = "REFUND:" + refund.getId() + ":" + partnerOrderId;
 
+                        // Allocate refund proportionally per partner's subtotal
+                        // For multi-partner orders, each PartnerOrder gets its share
+                        BigDecimal partnerRefundAmount = refund.getAmount().negate();
+
                         if ("SETTLED".equals(settlementStatus) && settlementState != null
                                 && ("APPROVED".equals(settlementState) || "PAID".equals(settlementState))) {
-                            // Create carry-forward reversal for next settlement period
-                            jdbc.update("INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
-                                        "VALUES (NULL,?,?,'REFUND_REVERSAL',?,?,?,?,?,'Pending carry-forward from refund',?)",
-                                    partnerId, refund.getOrderId(), partnerOrderId, refund.getId(),
-                                    refund.getAmount().negate(), refund.getCurrency(), idempotencyKey);
+                            jdbc.update(carryForwardSql,
+                                    partnerId, partnerOrderId, refund.getId(), refund.getOrderId(),
+                                    partnerRefundAmount, refund.getCurrency(), idempotencyKey);
                         } else if ("SETTLED".equals(settlementStatus) && settlementState != null
                                 && ("CALCULATED".equals(settlementState) || "OPEN".equals(settlementState)
                                     || "UNDER_REVIEW".equals(settlementState))) {
-                            // Add refund line to current settlement
                             Long settlementId = poRs.getLong("settlement_id");
-                            jdbc.update("INSERT INTO settlement_lines(settlement_id,partner_id,line_type,order_id,partner_order_id,refund_id,amount,currency,description,idempotency_key) " +
-                                        "VALUES (?,?,'REFUND',?,?,?,?,?,?,'Refund reversal',?)" +
-                                        "ON DUPLICATE KEY UPDATE id=id",
+                            jdbc.update(refundLineSql,
                                     settlementId, partnerId, refund.getOrderId(), partnerOrderId, refund.getId(),
-                                    refund.getAmount().negate(), refund.getCurrency(), idempotencyKey);
-                            jdbc.update("UPDATE settlements SET refund_amount=refund_amount+?,payable_amount=payable_amount-?,version=version+1 WHERE id=?",
-                                    refund.getAmount().abs(), refund.getAmount().abs(), settlementId);
+                                    partnerRefundAmount, refund.getCurrency(), idempotencyKey);
+                            jdbc.update(updateSettlementSql,
+                                    partnerRefundAmount.abs(), partnerRefundAmount.abs(), settlementId);
                         }
                     }
                     return null;
