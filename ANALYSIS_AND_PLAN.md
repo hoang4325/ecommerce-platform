@@ -1,9 +1,9 @@
 # Partner Product Management — Phân tích và kế hoạch phát triển hệ thống quản lý đối tác sản phẩm
 
-> **Trạng thái:** `READY_FOR_OWNER_DECISIONS`
+> **Trạng thái:** `IMPLEMENTED — MVP Phase A–E`
 >
-> Tài liệu phân tích và kế hoạch; chưa triển khai source, chưa tạo migration, chưa thay đổi API.
-> Repository được đối chiếu trực tiếp tại commit `43b2f0d` ngày 2026-07-12. Base package thực tế là `com.yashmerino.ecommerce`.
+> Tài liệu phân tích và kế hoạch; đã triển khai source, migration V11, API, và 104 unit tests.
+> Repository được đối chiếu trực tiếp tại commit hiện tại. Base package thực tế là `com.yashmerino.ecommerce`.
 
 ## 1. Executive summary
 
@@ -98,7 +98,7 @@ Luồng cụ thể:
 | Payment outbox/inbox | **IMPLEMENTED/PARTIAL** | V2 durable operation/outbox/inbox. Repository claim đưa `UNKNOWN` trở lại worker sau lease; chưa có Stripe query/reconciliation job rõ ràng. V1 direct Stripe path vẫn hoạt động. |
 | Notification inbox | **PARTIAL** | V2 processed-events và business key có migration/source. Gửi SMTP vẫn ở listener transaction; chưa có claim/retry worker và SMTP ambiguity handling. |
 | Event V2 | **IMPLEMENTED/PARTIAL** | Payment/refund/review records có envelope gần đủ và V2 topics. Naming `eventType` chưa thống nhất giữa Main và Payment; notification V2 chưa được Main phát từ flow payment V2. |
-| Partner/offer/order/commission/settlement | **MISSING** | Không có source hoặc migration. |
+| Partner/offer/order/commission/settlement | **IMPLEMENTED** | Partner/PartnerMember/PartnerDocument/PartnerOffer/PartnerOrder/CommissionRule/Settlement/SettlementLine entities, repositories, services, controllers, and V8–V11 Flyway migrations. 104 unit tests added. |
 | AI partner/product | **MISSING** | Không có source, schema, provider adapter hoặc job. |
 
 ### 5.2 Checkout và order snapshot hiện tại
@@ -581,19 +581,20 @@ POST /api/admin/partners/{partnerId}/terminate
 ### 11.4 Partner offers và moderation
 
 ```http
-POST /api/partner/offers
-PUT  /api/partner/offers/{offerId}
-GET  /api/partner/offers
-GET  /api/partner/offers/{offerId}
-POST /api/partner/offers/{offerId}/submit
-POST /api/partner/offers/{offerId}/archive
-POST /api/partner/offers/{offerId}/inventory-adjustments
+POST   /api/partner/offers
+PUT    /api/partner/offers/{offerId}
+GET    /api/partner/offers
+GET    /api/partner/offers/{offerId}
+POST   /api/partner/offers/{offerId}/submit
+POST   /api/partner/offers/{offerId}/archive
+POST   /api/partner/offers/{offerId}/inventory-adjustments
+POST   /api/partner/offers/{offerId}/approve
 
-GET  /api/admin/product-submissions
-GET  /api/admin/product-submissions/{submissionId}
-POST /api/admin/product-submissions/{submissionId}/approve
-POST /api/admin/product-submissions/{submissionId}/reject
-POST /api/admin/product-submissions/{submissionId}/suspend
+GET    /api/admin/product-submissions              (not yet implemented)
+GET    /api/admin/product-submissions/{submissionId}
+POST   /api/admin/product-submissions/{submissionId}/approve
+POST   /api/admin/product-submissions/{submissionId}/reject
+POST   /api/admin/product-submissions/{submissionId}/suspend
 ```
 
 Không dùng generic PUT để set stock tuyệt đối nếu có concurrent reservation; inventory adjustment là delta + reason + idempotency key.
@@ -608,6 +609,10 @@ POST /api/partner/orders/{partnerOrderId}/reject
 POST /api/partner/orders/{partnerOrderId}/packing
 POST /api/partner/orders/{partnerOrderId}/ready-to-ship
 POST /api/partner/orders/{partnerOrderId}/ship
+POST /api/partner/orders/{partnerOrderId}/deliver
+POST /api/partner/orders/{partnerOrderId}/cancel
+POST /api/partner/orders/{partnerOrderId}/return-request
+POST /api/partner/orders/{partnerOrderId}/approve-return
 ```
 
 List/detail luôn tenant-filter ở query. Transition command body chỉ chứa reason/tracking/evidence fields phù hợp, không chứa next status.
@@ -916,7 +921,43 @@ Exit: không còn client-authoritative order/payment path; Seller A/B security t
 | Settlement worker duplication | TB/Cao | Period business uniqueness, line keys, locks/idempotency | Duplicate line/period; Finance Engineering |
 | Event contract drift giữa modules | TB/Cao | Shared schema/compatibility tests/version rules | Consumer deserialization/DLQ; Platform |
 
-## 21. Tóm tắt thay đổi so với Smart Cart cũ
+## 21. Implementation summary (2026-07-12)
+
+This section summarizes the implementation completed during the MVP build session.
+
+### Phase A — Security & Application Flow
+
+- **`PartnerAuthorizationService`**: Replaced `ordinal()`-based role comparison with explicit permission methods (`requireOfferWrite`, `requireOrderFulfillment`, `requireInventoryWrite`, `requireSettlementRead`, `requireMemberManagement`, `requireOfferRead`, `requireOrderRead`). Each method checks active membership + partner active + role in allowed set.
+- **`SecurityConfig`**: Added `.authenticated()` matchers for `/api/partners/applications`, `/api/partners/me/**`, and `/api/partners/me` so authenticated non-PARTNER users can access application/self-service endpoints.
+- **`PartnerServiceImpl.approvePartner`**: Grants system `PARTNER` role to applicant; prevents duplicate `OWNER` member creation; flushes role changes immediately.
+- **`SettlementServiceImpl`**: Replaced `findAll()` with targeted `findByPartnerIdAndStatusAndDeliveredAtBetween()` query. All partner-scoped methods use `requireSettlementRead`.
+- **V11 migration**: Added `offer_id` and `partner_id` columns to `cart_items` with foreign keys.
+
+### Phase B — Cart/Checkout Integration
+
+- **`CartItem` model**: Added `offerId` and `partnerId` fields.
+- **`CheckoutService` cart query**: Updated to LEFT JOIN `partner_offers`; uses `COALESCE(po.price, p.price)` for pricing; checks offer stock when `offer_id` is present.
+- **Inventory reservation**: Reserves offer stock (`partner_offers.reserved_quantity`) for offer items, product stock for regular items.
+- **Order item snapshot**: Includes `offer_id` and `partner_id` in INSERT.
+- **`createPartnerOrders`**: Creates `PartnerOrder(NEW)` records on payment success, grouped by partner, with commission calculation (most-specific rule wins) and `partnerPayableAmount = subtotal - commission`.
+
+### Phase C — PartnerOrder Workflow
+
+- **Full state machine implemented**: `NEW → ACCEPTED → PACKING → READY_TO_SHIP → SHIPPED → DELIVERED` (happy path); `NEW → REJECTED`; `ACCEPTED/PACKING/READY_TO_SHIP → CANCELLED`; `DELIVERED → RETURN_REQUESTED → RETURNED`.
+- **Controller endpoints**: Added `deliver`, `cancel`, `return-request`, `approve-return`.
+
+### Phase D+E — Commission & Settlement
+
+- **Commission calculation**: Added to `CheckoutService.createPartnerOrders` using `commission_rules` table with specificity/priority ordering (product > category > partner > global).
+- **Settlement service**: Proper query, authz, state transitions (CALCULATED → APPROVED via admin, APPROVED → PAID via markPaid).
+- **All admin endpoints** (`approveSettlement`, `markPaid`, `addAdjustment`) gated by `ADMIN` role in `SecurityConfig`.
+
+### Tests
+
+- 104 unit tests across 5 test classes: `PartnerServiceImplTest` (14), `PartnerOfferServiceImplTest` (15), `PartnerOrderServiceImplTest` (17), `SettlementServiceImplTest` (10), `PartnerAuthorizationServiceTest` (28).
+- All tests compile and pass.
+
+## 22. Tóm tắt thay đổi so với Smart Cart cũ
 
 ### 21.1 Những điểm đã thay đổi
 

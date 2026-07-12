@@ -52,7 +52,7 @@ class RefundControllerTest {
         user.setId(1L);
 
         when(userService.getByUsername("user")).thenReturn(user);
-        when(refundService.requestRefund(eq(1L), eq(1L), any(RefundRequestDTO.class))).thenReturn(refund);
+        when(refundService.requestRefund(eq(1L), eq(1L), any(java.util.UUID.class), any(RefundRequestDTO.class))).thenReturn(refund);
 
         mvc.perform(post("/api/orders/1/refund")
                         .contentType(APPLICATION_JSON)
