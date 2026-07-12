@@ -35,6 +35,8 @@ public class PartnerAuthorizationService {
             PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.ORDER_STAFF);
     private static final Set<PartnerMemberRole> SETTLEMENT_READ = Set.of(
             PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.FINANCE_STAFF);
+    private static final Set<PartnerMemberRole> BANK_ACCOUNT_MANAGEMENT = Set.of(
+            PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.FINANCE_STAFF);
     private static final Set<PartnerMemberRole> MEMBER_MANAGEMENT = Set.of(
             PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER);
     private static final Set<PartnerMemberRole> PROFILE_MANAGEMENT = Set.of(
@@ -93,6 +95,11 @@ public class PartnerAuthorizationService {
     public void requireSettlementRead(Long partnerId) {
         requirePartnerActive(partnerId);
         requireAnyRole(partnerId, SETTLEMENT_READ);
+    }
+
+    public void requireBankAccountManagement(Long partnerId) {
+        requirePartnerActive(partnerId);
+        requireAnyRole(partnerId, BANK_ACCOUNT_MANAGEMENT);
     }
 
     public void requireMemberManagement(Long partnerId) {
