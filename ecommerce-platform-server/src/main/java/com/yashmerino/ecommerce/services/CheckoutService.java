@@ -174,6 +174,7 @@ public class CheckoutService {
                     sourceType, line.offerId(),
                     "inventory:reserve:" + order.getId() + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : "0"));
         }
+        allocateDiscountsToItems(order.getId(), lines, subtotal, couponDiscount, pointValue);
         if (promotion != null) {
             jdbc.update("INSERT INTO promotion_reservations(promotion_id,user_id,order_id,discount_amount,status,expires_at,idempotency_key) VALUES (?,?,?,?,'RESERVED',?,?)",
                     promotion.id(), user.getId(), order.getId(), couponDiscount, expiresAt, "promotion:reserve:" + promotion.id() + ":" + order.getId());
@@ -487,7 +488,9 @@ public class CheckoutService {
                     orderId, r.productId(), r.offerId());
         }
 
-        jdbc.query("SELECT partner_id,SUM(line_total) AS subtotal," +
+        jdbc.query("SELECT partner_id," +
+                    "SUM(line_total) AS subtotal," +
+                    "SUM(COALESCE(coupon_discount_allocation,0)+COALESCE(redeemed_point_allocation,0)) AS discount_allocation," +
                     "SUM(commission_amount) AS total_commission," +
                     "SUM(partner_payable_amount) AS total_payable,currency " +
                     "FROM order_items WHERE order_id=? AND partner_id IS NOT NULL " +
@@ -496,13 +499,14 @@ public class CheckoutService {
                     while (rs.next()) {
                         Long partnerId = rs.getLong("partner_id");
                         BigDecimal subtotal = rs.getBigDecimal("subtotal");
+                        BigDecimal discountAllocation = rs.getBigDecimal("discount_allocation");
                         BigDecimal commissionAmount = rs.getBigDecimal("total_commission");
                         BigDecimal payable = rs.getBigDecimal("total_payable");
                         String currency = rs.getString("currency");
 
                         jdbc.update("INSERT INTO partner_orders(order_id,partner_id,status,subtotal,discount_allocation,shipping_allocation,commission_amount,partner_payable_amount,currency,settlement_status,version,created_at,updated_at) " +
-                                    "VALUES (?,?,'AWAITING_PAYMENT',?,0,0,?,?,?,?,'UNSETTLED',0,NOW(),NOW())",
-                                orderId, partnerId, subtotal, commissionAmount, payable, currency);
+                                    "VALUES (?,?,'AWAITING_PAYMENT',?,?,0,?,?,?,?,'UNSETTLED',0,NOW(),NOW())",
+                                orderId, partnerId, subtotal, discountAllocation, commissionAmount, payable, currency);
                     }
                     return null;
                 }, orderId);
@@ -585,6 +589,43 @@ public class CheckoutService {
     private <T> T read(String value, Class<T> type) {
         try { return objectMapper.readValue(value, type); }
         catch (JsonProcessingException e) { throw new IllegalStateException("stored_response_invalid", e); }
+    }
+
+    private void allocateDiscountsToItems(Long orderId, List<CartLine> lines, BigDecimal subtotal,
+                                           BigDecimal couponDiscount, BigDecimal pointValue) {
+        if (subtotal.compareTo(ZERO) <= 0) return;
+        BigDecimal allocatedCoupon = ZERO;
+        BigDecimal allocatedPoints = ZERO;
+        int n = lines.size();
+        for (int i = 0; i < n; i++) {
+            CartLine line = lines.get(i);
+            BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
+            BigDecimal itemCoupon;
+            BigDecimal itemPoints;
+            if (couponDiscount.compareTo(ZERO) > 0) {
+                if (i == n - 1) {
+                    itemCoupon = money(couponDiscount.subtract(allocatedCoupon));
+                } else {
+                    itemCoupon = money(couponDiscount.multiply(lineTotal).divide(subtotal, RoundingMode.HALF_UP));
+                    allocatedCoupon = allocatedCoupon.add(itemCoupon);
+                }
+            } else {
+                itemCoupon = ZERO;
+            }
+            if (pointValue.compareTo(ZERO) > 0) {
+                if (i == n - 1) {
+                    itemPoints = money(pointValue.subtract(allocatedPoints));
+                } else {
+                    itemPoints = money(pointValue.multiply(lineTotal).divide(subtotal, RoundingMode.HALF_UP));
+                    allocatedPoints = allocatedPoints.add(itemPoints);
+                }
+            } else {
+                itemPoints = ZERO;
+            }
+            jdbc.update("UPDATE order_items SET coupon_discount_allocation=?,redeemed_point_allocation=? " +
+                            "WHERE order_id=? AND product_id=? AND (offer_id <=> ?)",
+                    itemCoupon, itemPoints, orderId, line.productId(), line.offerId());
+        }
     }
 
     private record RequestRow(String hash, String status, String response) {}
