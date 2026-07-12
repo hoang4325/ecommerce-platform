@@ -38,6 +38,8 @@ build/
 ### Mac OS ###
 .DS_Store
 
+docs/superpower/
+
 # Default ignored files
 /shelf/
 /workspace.xml
