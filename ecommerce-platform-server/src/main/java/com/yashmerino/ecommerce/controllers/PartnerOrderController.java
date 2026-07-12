@@ -57,4 +57,30 @@ public class PartnerOrderController {
                                                            @PathVariable Long partnerOrderId) {
         return ResponseEntity.ok(partnerOrderService.shipOrder(partnerId, partnerOrderId));
     }
+
+    @PostMapping("/{partnerOrderId}/deliver")
+    public ResponseEntity<PartnerOrderResponse> deliverOrder(@RequestParam Long partnerId,
+                                                              @PathVariable Long partnerOrderId) {
+        return ResponseEntity.ok(partnerOrderService.deliverOrder(partnerId, partnerOrderId));
+    }
+
+    @PostMapping("/{partnerOrderId}/cancel")
+    public ResponseEntity<PartnerOrderResponse> cancelOrder(@RequestParam Long partnerId,
+                                                             @PathVariable Long partnerOrderId,
+                                                             @RequestParam String reason) {
+        return ResponseEntity.ok(partnerOrderService.cancelOrder(partnerId, partnerOrderId, reason));
+    }
+
+    @PostMapping("/{partnerOrderId}/return-request")
+    public ResponseEntity<PartnerOrderResponse> requestReturn(@RequestParam Long partnerId,
+                                                               @PathVariable Long partnerOrderId,
+                                                               @RequestParam String reason) {
+        return ResponseEntity.ok(partnerOrderService.requestReturn(partnerId, partnerOrderId, reason));
+    }
+
+    @PostMapping("/{partnerOrderId}/approve-return")
+    public ResponseEntity<PartnerOrderResponse> approveReturn(@RequestParam Long partnerId,
+                                                               @PathVariable Long partnerOrderId) {
+        return ResponseEntity.ok(partnerOrderService.approveReturn(partnerId, partnerOrderId));
+    }
 }

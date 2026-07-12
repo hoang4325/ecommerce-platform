@@ -9,7 +9,6 @@ import com.yashmerino.ecommerce.model.dto.offer.PartnerOfferResponse;
 import com.yashmerino.ecommerce.model.offer.PartnerOffer;
 import com.yashmerino.ecommerce.model.offer.PartnerOfferStatus;
 import com.yashmerino.ecommerce.model.partner.Partner;
-import com.yashmerino.ecommerce.model.partner.PartnerMemberRole;
 import com.yashmerino.ecommerce.repositories.PartnerOfferRepository;
 import com.yashmerino.ecommerce.repositories.ProductRepository;
 import com.yashmerino.ecommerce.security.PartnerAuthorizationService;
@@ -22,7 +21,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -32,13 +30,10 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     private final ProductRepository productRepository;
     private final PartnerAuthorizationService authz;
 
-    private static final Set<PartnerMemberRole> OFFER_ROLES = Set.of(
-            PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.PRODUCT_STAFF);
-
     @Override
     @Transactional
     public PartnerOfferResponse createOffer(Long partnerId, PartnerOfferRequest request) {
-        authz.requireAllowsCommand(partnerId, OFFER_ROLES);
+        authz.requireOfferWrite(partnerId);
 
         if (offerRepository.existsByPartnerIdAndPartnerSku(partnerId, request.partnerSku())) {
             throw new ConflictException("partner_sku_already_exists");
@@ -64,7 +59,7 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     @Override
     @Transactional
     public PartnerOfferResponse updateOffer(Long partnerId, Long offerId, PartnerOfferRequest request) {
-        authz.requireAllowsCommand(partnerId, OFFER_ROLES);
+        authz.requireOfferWrite(partnerId);
 
         PartnerOffer offer = offerRepository.findByIdAndPartnerId(offerId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("offer_not_found"));
@@ -95,7 +90,7 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     @Override
     @Transactional(readOnly = true)
     public PartnerOfferResponse getOffer(Long partnerId, Long offerId) {
-        authz.requireAllowsCommand(partnerId, OFFER_ROLES);
+        authz.requireOfferRead(partnerId);
         PartnerOffer offer = offerRepository.findByIdAndPartnerId(offerId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("offer_not_found"));
         return PartnerOfferResponse.from(offer);
@@ -104,14 +99,14 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     @Override
     @Transactional(readOnly = true)
     public Page<PartnerOfferResponse> getOffers(Long partnerId, Pageable pageable) {
-        authz.requirePartnerActive(partnerId);
+        authz.requireOfferRead(partnerId);
         return offerRepository.findByPartnerId(partnerId, pageable).map(PartnerOfferResponse::from);
     }
 
     @Override
     @Transactional
     public PartnerOfferResponse submitOffer(Long partnerId, Long offerId) {
-        authz.requireAllowsCommand(partnerId, OFFER_ROLES);
+        authz.requireOfferWrite(partnerId);
 
         PartnerOffer offer = offerRepository.findByIdAndPartnerId(offerId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("offer_not_found"));
@@ -129,7 +124,7 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     @Override
     @Transactional
     public PartnerOfferResponse archiveOffer(Long partnerId, Long offerId) {
-        authz.requireAllowsCommand(partnerId, OFFER_ROLES);
+        authz.requireOfferWrite(partnerId);
 
         PartnerOffer offer = offerRepository.findByIdAndPartnerId(offerId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("offer_not_found"));
@@ -145,8 +140,7 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
     @Override
     @Transactional
     public PartnerOfferResponse adjustInventory(Long partnerId, Long offerId, int delta, String reason) {
-        authz.requireAllowsCommand(partnerId, Set.of(
-                PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.PRODUCT_STAFF));
+        authz.requireInventoryWrite(partnerId);
 
         PartnerOffer offer = offerRepository.findByIdAndPartnerId(offerId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("offer_not_found"));

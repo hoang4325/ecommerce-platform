@@ -19,4 +19,12 @@ public interface PartnerOrderService {
     PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId);
 
     PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId);
+
+    PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId);
+
+    PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason);
+
+    PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason);
+
+    PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId);
 }

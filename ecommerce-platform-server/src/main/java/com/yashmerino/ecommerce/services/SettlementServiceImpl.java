@@ -6,7 +6,6 @@ import com.yashmerino.ecommerce.model.dto.settlement.SettlementAdjustmentRequest
 import com.yashmerino.ecommerce.model.dto.settlement.SettlementResponse;
 import com.yashmerino.ecommerce.model.order.PartnerOrder;
 import com.yashmerino.ecommerce.model.order.PartnerOrderStatus;
-import com.yashmerino.ecommerce.model.partner.PartnerMemberRole;
 import com.yashmerino.ecommerce.model.settlement.Settlement;
 import com.yashmerino.ecommerce.model.settlement.SettlementLine;
 import com.yashmerino.ecommerce.model.settlement.SettlementStatus;
@@ -39,8 +38,7 @@ public class SettlementServiceImpl implements SettlementService {
     @Transactional
     public SettlementResponse calculateSettlement(Long partnerId, LocalDateTime periodStart,
                                                    LocalDateTime periodEnd, String currency) {
-        authz.requireAllowsCommand(partnerId, java.util.Set.of(
-                PartnerMemberRole.OWNER, PartnerMemberRole.MANAGER, PartnerMemberRole.FINANCE_STAFF));
+        authz.requireSettlementRead(partnerId);
 
         Settlement settlement = new Settlement();
         settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
@@ -51,13 +49,9 @@ public class SettlementServiceImpl implements SettlementService {
         settlement.setStatus(SettlementStatus.CALCULATED);
         settlement = settlementRepository.save(settlement);
 
-        List<PartnerOrder> deliveredOrders = partnerOrderRepository.findAll().stream()
-                .filter(po -> po.getPartner().getId().equals(partnerId)
-                        && po.getStatus() == PartnerOrderStatus.DELIVERED
-                        && po.getDeliveredAt() != null
-                        && !po.getDeliveredAt().isBefore(periodStart)
-                        && po.getDeliveredAt().isBefore(periodEnd))
-                .toList();
+        List<PartnerOrder> deliveredOrders = partnerOrderRepository
+                .findByPartnerIdAndStatusAndDeliveredAtBetween(
+                        partnerId, PartnerOrderStatus.DELIVERED, periodStart, periodEnd);
 
         BigDecimal grossSales = BigDecimal.ZERO;
         BigDecimal commissionAmount = BigDecimal.ZERO;
@@ -88,14 +82,14 @@ public class SettlementServiceImpl implements SettlementService {
     @Override
     @Transactional(readOnly = true)
     public Page<SettlementResponse> getSettlements(Long partnerId, Pageable pageable) {
-        authz.requirePartnerActive(partnerId);
+        authz.requireSettlementRead(partnerId);
         return settlementRepository.findByPartnerId(partnerId, pageable).map(SettlementResponse::from);
     }
 
     @Override
     @Transactional(readOnly = true)
     public SettlementResponse getSettlement(Long partnerId, Long settlementId) {
-        authz.requirePartnerActive(partnerId);
+        authz.requireSettlementRead(partnerId);
         Settlement settlement = settlementRepository.findByIdAndPartnerId(settlementId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("settlement_not_found"));
         return SettlementResponse.from(settlement);
