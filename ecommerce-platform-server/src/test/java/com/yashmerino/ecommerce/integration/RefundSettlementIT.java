@@ -14,7 +14,7 @@ import java.sql.DriverManager;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
-class RefundSettlementIntegrationTest {
+class RefundSettlementIT {
 
     static final String TEST_DB = "ecommerce_platform";
 

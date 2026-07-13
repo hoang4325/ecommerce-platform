@@ -14,7 +14,7 @@ import java.sql.DriverManager;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
-class CheckoutFlowIntegrationTest {
+class CheckoutFlowIT {
 
     static final String TEST_DB = "ecommerce_platform";
 

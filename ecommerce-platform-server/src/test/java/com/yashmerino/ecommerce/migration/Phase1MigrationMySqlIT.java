@@ -14,7 +14,7 @@ import java.util.TreeSet;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @Testcontainers
-class Phase1MigrationMySqlTest {
+class Phase1MigrationMySqlIT {
     @Container
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:8.0.39")
             .withDatabaseName("ecommerce_platform");

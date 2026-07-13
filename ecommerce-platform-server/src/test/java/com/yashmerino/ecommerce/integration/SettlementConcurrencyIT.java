@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
-class SettlementConcurrencyIntegrationTest {
+class SettlementConcurrencyIT {
 
     static final String TEST_DB = "ecommerce_platform";
 

@@ -14,7 +14,7 @@ import java.util.TreeSet;
 import static org.junit.jupiter.api.Assertions.*;
 
 @Testcontainers
-class Phase2MigrationMySqlTest {
+class Phase2MigrationMySqlIT {
 
     static final String TEST_DB = "ecommerce_platform";
     @Container
