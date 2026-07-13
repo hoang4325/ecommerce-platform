@@ -31,12 +31,9 @@ jobs:
       - name: Run backend tests
         run: mvn -B -pl ecommerce-platform-server -am clean verify
 
-      - name: Fail on skipped tests
+      - name: Verify test reports
         if: always()
-        run: |
-          if grep -R "Skipped: [1-9]" ecommerce-platform-server/target/surefire-reports ecommerce-platform-server/target/failsafe-reports 2>/dev/null; then
-            exit 1
-          fi
+        run: python3 scripts/verify_test_reports.py
 
       - name: Publish Surefire reports
         if: always()
@@ -52,4 +49,4 @@ jobs:
         with:
           name: backend-failsafe-reports
           path: ecommerce-platform-server/target/failsafe-reports/**
-          if-no-files-found: warn
+          if-no-files-found: error

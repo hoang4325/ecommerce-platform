@@ -120,15 +120,68 @@ public class CheckoutService {
             }
         }
         if (lines.isEmpty()) throw new ConflictException("cart_is_empty");
-        lines.sort((a, b) -> {
-            Long ao = a.offerId(), bo = b.offerId();
-            if (ao == null && bo == null) return 0;
-            if (ao == null) return 1;
-            if (bo == null) return -1;
-            return ao.compareTo(bo);
-        });
+
+        java.util.List<Long> allOfferIds = lines.stream()
+            .map(CartLine::offerId)
+            .filter(java.util.Objects::nonNull)
+            .distinct()
+            .sorted()
+            .collect(java.util.stream.Collectors.toList());
+        java.util.List<Long> allProductIds = lines.stream()
+            .map(CartLine::productId)
+            .distinct()
+            .sorted()
+            .collect(java.util.stream.Collectors.toList());
+
+        java.util.Map<Long, Integer> freshOfferOnHand = new java.util.HashMap<>();
+        java.util.Map<Long, Integer> freshOfferReserved = new java.util.HashMap<>();
+        java.util.Map<Long, String> freshOfferStatus = new java.util.HashMap<>();
+        if (!allOfferIds.isEmpty()) {
+            String ph = String.join(",", allOfferIds.stream().map(id -> "?").collect(java.util.stream.Collectors.toList()));
+            jdbc.query("SELECT id,on_hand_quantity,reserved_quantity,status FROM partner_offers WHERE id IN (" + ph + ") ORDER BY id FOR UPDATE",
+                    rs -> {
+                        while (rs.next()) {
+                            long id = rs.getLong("id");
+                            freshOfferOnHand.put(id, rs.getInt("on_hand_quantity"));
+                            freshOfferReserved.put(id, rs.getInt("reserved_quantity"));
+                            freshOfferStatus.put(id, rs.getString("status"));
+                        }
+                        return null;
+                    }, allOfferIds.toArray());
+        }
+
+        java.util.Map<Long, Integer> freshProductOnHand = new java.util.HashMap<>();
+        java.util.Map<Long, Integer> freshProductReserved = new java.util.HashMap<>();
+        java.util.Map<Long, Boolean> freshProductActive = new java.util.HashMap<>();
+        {
+            String ph = String.join(",", allProductIds.stream().map(id -> "?").collect(java.util.stream.Collectors.toList()));
+            jdbc.query("SELECT id,on_hand_quantity,reserved_quantity,active FROM products WHERE id IN (" + ph + ") ORDER BY id FOR UPDATE",
+                    rs -> {
+                        while (rs.next()) {
+                            long id = rs.getLong("id");
+                            freshProductOnHand.put(id, rs.getInt("on_hand_quantity"));
+                            freshProductReserved.put(id, rs.getInt("reserved_quantity"));
+                            freshProductActive.put(id, rs.getBoolean("active"));
+                        }
+                        return null;
+                    }, allProductIds.toArray());
+        }
+
         for (CartLine line : lines) {
-            if (!line.active() || line.quantity() <= 0 || line.onHand() - line.reserved() < line.quantity()) {
+            int onHand, reserved;
+            boolean active;
+            if (line.offerId() != null) {
+                if (!freshOfferOnHand.containsKey(line.offerId())) throw new InsufficientStockException();
+                onHand = freshOfferOnHand.get(line.offerId());
+                reserved = freshOfferReserved.get(line.offerId());
+                active = "APPROVED".equals(freshOfferStatus.get(line.offerId()));
+            } else {
+                if (!freshProductOnHand.containsKey(line.productId())) throw new InsufficientStockException();
+                onHand = freshProductOnHand.get(line.productId());
+                reserved = freshProductReserved.get(line.productId());
+                active = freshProductActive.get(line.productId());
+            }
+            if (!active || line.quantity() <= 0 || onHand - reserved < line.quantity()) {
                 throw new InsufficientStockException();
             }
         }
@@ -148,14 +201,35 @@ public class CheckoutService {
         order.setUser(user); order.setSubtotal(subtotal); order.setCouponDiscount(couponDiscount);
         order.setRedeemedPointValue(pointValue); order.setTotalAmount(total); order.setCurrency(currency);
         order.setReservationExpiresAt(expiresAt); order.setStatus(OrderStatus.CREATED);
-        order = orders.saveAndFlush(order);
+        Order savedOrder = orders.saveAndFlush(order);
+        Long savedOrderId = savedOrder.getId();
 
+        java.util.Map<Long, BigDecimal> orderItemTotals = new java.util.LinkedHashMap<>();
         for (CartLine line : lines) {
             BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
             BigDecimal qualifying = lineTotal;
-            jdbc.update("INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift,currency,partner_name,partner_sku) VALUES (?,?,?,?,?,?,?,?,?,false,?,?,?)",
-                    order.getId(), line.productId(), line.offerId(), line.partnerId(), line.name(),
-                    money(line.price()), line.quantity(), lineTotal, qualifying, currency, line.partnerName(), line.partnerSku());
+            KeyHolder keyHolder = new GeneratedKeyHolder();
+            Long capturedOrderId = savedOrderId;
+            jdbc.update(con -> {
+                PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO order_items(order_id,product_id,offer_id,partner_id,name,unit_price,quantity,line_total,qualifying_amount,is_gift,currency,partner_name,partner_sku) VALUES (?,?,?,?,?,?,?,?,?,false,?,?,?)",
+                    Statement.RETURN_GENERATED_KEYS);
+                ps.setLong(1, capturedOrderId);
+                ps.setLong(2, line.productId());
+                ps.setObject(3, line.offerId());
+                ps.setObject(4, line.partnerId());
+                ps.setString(5, line.name());
+                ps.setBigDecimal(6, money(line.price()));
+                ps.setInt(7, line.quantity());
+                ps.setBigDecimal(8, lineTotal);
+                ps.setBigDecimal(9, qualifying);
+                ps.setString(10, currency);
+                ps.setString(11, line.partnerName());
+                ps.setString(12, line.partnerSku());
+                return ps;
+            }, keyHolder);
+            long orderItemId = keyHolder.getKey().longValue();
+            orderItemTotals.put(orderItemId, lineTotal);
             if (line.offerId() != null) {
                 int changed = jdbc.update(
                         "UPDATE partner_offers SET reserved_quantity=reserved_quantity+?,version=version+1 " +
@@ -170,26 +244,26 @@ public class CheckoutService {
             }
             String sourceType = line.offerId() != null ? "OFFER" : "PRODUCT";
             jdbc.update("INSERT INTO inventory_reservations(product_id,order_id,quantity,status,expires_at,inventory_source_type,offer_id,idempotency_key) VALUES (?,?,?,'RESERVED',?,?,?,?)",
-                    line.productId(), order.getId(), line.quantity(), expiresAt,
+                    line.productId(), capturedOrderId, line.quantity(), expiresAt,
                     sourceType, line.offerId(),
-                    "inventory:reserve:" + order.getId() + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : "0"));
+                    "inventory:reserve:" + capturedOrderId + ":" + line.productId() + ":" + (line.offerId() != null ? line.offerId() : "0"));
         }
-        allocateDiscountsToItems(order.getId(), lines, subtotal, couponDiscount, pointValue);
+        allocateDiscountsToItems(savedOrderId, orderItemTotals, subtotal, couponDiscount, pointValue);
         if (promotion != null) {
             jdbc.update("INSERT INTO promotion_reservations(promotion_id,user_id,order_id,discount_amount,status,expires_at,idempotency_key) VALUES (?,?,?,?,'RESERVED',?,?)",
-                    promotion.id(), user.getId(), order.getId(), couponDiscount, expiresAt, "promotion:reserve:" + promotion.id() + ":" + order.getId());
+                    promotion.id(), user.getId(), savedOrderId, couponDiscount, expiresAt, "promotion:reserve:" + promotion.id() + ":" + savedOrderId);
         }
-        if (request.requestedPoints() > 0) reservePoints(user.getId(), order.getId(), request.requestedPoints(), pointValue, currency, expiresAt);
+        if (request.requestedPoints() > 0) reservePoints(user.getId(), savedOrderId, request.requestedPoints(), pointValue, currency, expiresAt);
 
-        createPartnerOrdersAtCheckout(order.getId());
+        createPartnerOrdersAtCheckout(savedOrderId);
 
-        Payment payment = new Payment(order, total, PaymentStatus.AWAITING_PAYMENT_METHOD);
+        Payment payment = new Payment(savedOrder, total, PaymentStatus.AWAITING_PAYMENT_METHOD);
         payment.setCurrency(currency);
         payment = payments.saveAndFlush(payment);
-        CheckoutResponseDTO response = new CheckoutResponseDTO(order.getId(), payment.getId(), total, currency,
+        CheckoutResponseDTO response = new CheckoutResponseDTO(savedOrderId, payment.getId(), total, currency,
                 payment.getStatus(), expiresAt.toInstant(ZoneOffset.UTC));
         jdbc.update("UPDATE checkout_requests SET order_id=?,response_snapshot=?,status='COMPLETED',updated_at=CURRENT_TIMESTAMP(6) WHERE user_id=? AND idempotency_key=?",
-                order.getId(), write(response), user.getId(), idempotencyKey.toString());
+                savedOrderId, write(response), user.getId(), idempotencyKey.toString());
         return response;
     }
 
@@ -511,7 +585,7 @@ public class CheckoutService {
                     return null;
                 }, orderId);
 
-        jdbc.update("UPDATE order_items oi " +
+        int linked = jdbc.update("UPDATE order_items oi " +
                     "JOIN partner_orders po ON po.order_id=oi.order_id AND po.partner_id=oi.partner_id " +
                     "SET oi.partner_order_id=po.id " +
                     "WHERE oi.order_id=?", orderId);
@@ -591,15 +665,16 @@ public class CheckoutService {
         catch (JsonProcessingException e) { throw new IllegalStateException("stored_response_invalid", e); }
     }
 
-    private void allocateDiscountsToItems(Long orderId, List<CartLine> lines, BigDecimal subtotal,
+    private void allocateDiscountsToItems(Long orderId, java.util.Map<Long, BigDecimal> orderItemTotals, BigDecimal subtotal,
                                            BigDecimal couponDiscount, BigDecimal pointValue) {
         if (subtotal.compareTo(ZERO) <= 0) return;
         BigDecimal allocatedCoupon = ZERO;
         BigDecimal allocatedPoints = ZERO;
-        int n = lines.size();
-        for (int i = 0; i < n; i++) {
-            CartLine line = lines.get(i);
-            BigDecimal lineTotal = money(line.price().multiply(BigDecimal.valueOf(line.quantity())));
+        int n = orderItemTotals.size();
+        int i = 0;
+        for (java.util.Map.Entry<Long, BigDecimal> entry : orderItemTotals.entrySet()) {
+            long orderItemId = entry.getKey();
+            BigDecimal lineTotal = entry.getValue();
             BigDecimal itemCoupon;
             BigDecimal itemPoints;
             if (couponDiscount.compareTo(ZERO) > 0) {
@@ -622,9 +697,10 @@ public class CheckoutService {
             } else {
                 itemPoints = ZERO;
             }
-            jdbc.update("UPDATE order_items SET coupon_discount_allocation=?,redeemed_point_allocation=? " +
-                            "WHERE order_id=? AND product_id=? AND (offer_id <=> ?)",
-                    itemCoupon, itemPoints, orderId, line.productId(), line.offerId());
+            int changed = jdbc.update("UPDATE order_items SET coupon_discount_allocation=?,redeemed_point_allocation=? WHERE id=? AND order_id=?",
+                    itemCoupon, itemPoints, orderItemId, orderId);
+            if (changed != 1) throw new IllegalStateException("order_item_not_found");
+            i++;
         }
     }
 

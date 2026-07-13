@@ -96,7 +96,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse acceptOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "ACCEPT", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.ACCEPTED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -109,7 +109,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.ACCEPTED.name(), partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.NEW, PartnerOrderStatus.ACCEPTED, null);
+                            PartnerOrderStatus.NEW, PartnerOrderStatus.ACCEPTED, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_ACCEPTED", "partner.order.accepted", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "ACCEPTED"),
@@ -123,7 +124,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse rejectOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "REJECT", canonicalReason(reason), idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.REJECTED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -136,7 +137,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.REJECTED.name(), reason, partnerOrderId, PartnerOrderStatus.NEW.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.NEW, PartnerOrderStatus.REJECTED, reason);
+                            PartnerOrderStatus.NEW, PartnerOrderStatus.REJECTED, reason,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_REJECTED", "partner.order.rejected", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "REJECTED", "reason", reason),
@@ -150,7 +152,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse markPacking(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "PACKING", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.PACKING) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -163,7 +165,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.PACKING.name(), partnerOrderId, PartnerOrderStatus.ACCEPTED.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.ACCEPTED, PartnerOrderStatus.PACKING, null);
+                            PartnerOrderStatus.ACCEPTED, PartnerOrderStatus.PACKING, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_PACKING", "partner.order.packing", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "PACKING"),
@@ -177,7 +180,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse markReadyToShip(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "READY_TO_SHIP", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.READY_TO_SHIP) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -190,7 +193,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.READY_TO_SHIP.name(), partnerOrderId, PartnerOrderStatus.PACKING.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.PACKING, PartnerOrderStatus.READY_TO_SHIP, null);
+                            PartnerOrderStatus.PACKING, PartnerOrderStatus.READY_TO_SHIP, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_READY_TO_SHIP", "partner.order.ready-to-ship", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "READY_TO_SHIP"),
@@ -204,7 +208,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse shipOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "SHIP", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.SHIPPED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -217,7 +221,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.SHIPPED.name(), partnerOrderId, PartnerOrderStatus.READY_TO_SHIP.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.READY_TO_SHIP, PartnerOrderStatus.SHIPPED, null);
+                            PartnerOrderStatus.READY_TO_SHIP, PartnerOrderStatus.SHIPPED, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_SHIPPED", "partner.order.shipped", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "SHIPPED"),
@@ -231,7 +236,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse deliverOrder(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "DELIVER", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.DELIVERED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -244,7 +249,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.DELIVERED.name(), partnerOrderId, PartnerOrderStatus.SHIPPED.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.SHIPPED, PartnerOrderStatus.DELIVERED, null);
+                            PartnerOrderStatus.SHIPPED, PartnerOrderStatus.DELIVERED, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_DELIVERED", "partner.order.delivered", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "DELIVERED"),
@@ -258,7 +264,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse cancelOrder(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "CANCEL", canonicalReason(reason), idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.CANCELLED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -272,7 +278,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.CANCELLED.name(), reason, partnerOrderId, currentStatus, row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            row.status(), PartnerOrderStatus.CANCELLED, reason);
+                            row.status(), PartnerOrderStatus.CANCELLED, reason,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_CANCELLED", "partner.order.cancelled", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "CANCELLED", "reason", reason),
@@ -286,7 +293,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse requestReturn(Long partnerId, Long partnerOrderId, String reason, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "RETURN_REQUEST", canonicalReason(reason), idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.RETURN_REQUESTED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -299,7 +306,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.RETURN_REQUESTED.name(), reason, partnerOrderId, PartnerOrderStatus.DELIVERED.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.DELIVERED, PartnerOrderStatus.RETURN_REQUESTED, reason);
+                            PartnerOrderStatus.DELIVERED, PartnerOrderStatus.RETURN_REQUESTED, reason,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_RETURN_REQUESTED", "partner.order.return-requested", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "RETURN_REQUESTED", "reason", reason),
@@ -313,7 +321,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     public PartnerOrderResponse approveReturn(Long partnerId, Long partnerOrderId, String idempotencyKey) {
         authz.requireOrderFulfillment(partnerId);
         return executeCommand(partnerId, partnerOrderId, "APPROVE_RETURN", "", idempotencyKey,
-                () -> {
+                (ctx) -> {
                     PartnerOrderRow row = selectForUpdate(partnerId, partnerOrderId);
                     if (row.status() == PartnerOrderStatus.RETURNED) {
                         return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
@@ -326,7 +334,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                             PartnerOrderStatus.RETURNED.name(), partnerOrderId, PartnerOrderStatus.RETURN_REQUESTED.name(), row.version());
                     if (updated != 1) throw new ConflictException("partner_order_state_changed");
                     writeAuditLog(partnerOrderId, partnerId, currentUserId(),
-                            PartnerOrderStatus.RETURN_REQUESTED, PartnerOrderStatus.RETURNED, null);
+                            PartnerOrderStatus.RETURN_REQUESTED, PartnerOrderStatus.RETURNED, null,
+                            ctx.idempotencyKey(), ctx.correlationId(), ctx.commandType());
                     outboxService.saveOutboxEvent(UUID.randomUUID().toString(), "PARTNER_ORDER", partnerOrderId,
                             "PARTNER_ORDER_RETURNED", "partner.order.returned", partnerOrderId.toString(),
                             Map.of("partnerOrderId", partnerOrderId, "partnerId", partnerId, "status", "RETURNED"),
@@ -344,6 +353,8 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
         }
 
         String requestHash = hash(partnerOrderId + "|" + commandType + "|" + canonicalPayload);
+        String correlationId = UUID.randomUUID().toString();
+        CommandContext ctx = new CommandContext(partnerOrderId, partnerId, commandType, idempotencyKey, correlationId);
 
         try {
             jdbc.update(
@@ -351,9 +362,9 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                     partnerOrderId, partnerId, commandType, idempotencyKey, requestHash);
         } catch (DuplicateKeyException e) {
             List<CommandRow> existing = jdbc.query(
-                    "SELECT request_hash, response_snapshot, status FROM partner_order_commands WHERE idempotency_key=? AND partner_order_id=? FOR UPDATE",
+                    "SELECT request_hash, response_snapshot, status FROM partner_order_commands WHERE idempotency_key=? AND partner_order_id=? AND command_type=? FOR UPDATE",
                     (rs, n) -> new CommandRow(rs.getString("request_hash"), rs.getString("response_snapshot"), rs.getString("status")),
-                    idempotencyKey, partnerOrderId);
+                    idempotencyKey, partnerOrderId, commandType);
 
             if (existing.isEmpty()) {
                 throw new IllegalStateException("idempotency_record_vanished");
@@ -365,31 +376,47 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
                 throw new ConflictException("idempotency_key_payload_mismatch");
             }
 
-            if (cmd.response() != null && "COMPLETED".equals(cmd.status())) {
+            if ("PENDING".equals(cmd.status())) {
+                throw new ConflictException("command_in_progress");
+            }
+
+            if ("COMPLETED".equals(cmd.status())) {
+                if (cmd.response() == null) {
+                    throw new ConflictException("idempotency_response_corrupted");
+                }
                 try {
                     return objectMapper.readValue(cmd.response(), PartnerOrderResponse.class);
                 } catch (JsonProcessingException ex) {
-                    return executor.execute();
+                    throw new ConflictException("idempotency_response_corrupted");
                 }
             }
         }
 
-        PartnerOrderResponse response = executor.execute();
+        PartnerOrderResponse response;
+        try {
+            response = executor.execute(ctx);
+        } catch (Exception ex) {
+            jdbc.update(
+                    "UPDATE partner_order_commands SET status='FAILED', executed_at=NOW() WHERE idempotency_key=? AND partner_order_id=? AND command_type=?",
+                    idempotencyKey, partnerOrderId, commandType);
+            throw ex;
+        }
         jdbc.update(
-                "UPDATE partner_order_commands SET response_snapshot=?, status='COMPLETED', executed_at=NOW() WHERE idempotency_key=? AND partner_order_id=?",
-                write(response), idempotencyKey, partnerOrderId);
+                "UPDATE partner_order_commands SET response_snapshot=?, status='COMPLETED', executed_at=NOW() WHERE idempotency_key=? AND partner_order_id=? AND command_type=?",
+                write(response), idempotencyKey, partnerOrderId, commandType);
         return response;
     }
 
     private void writeAuditLog(Long partnerOrderId, Long partnerId, Long actorUserId,
                                 PartnerOrderStatus fromStatus, PartnerOrderStatus toStatus,
-                                String reason) {
+                                String reason, String idempotencyKey, String correlationId,
+                                String commandType) {
         jdbc.update(
-                "INSERT INTO partner_order_audit(partner_order_id, partner_id, actor_user_id, from_status, to_status, reason, occurred_at) VALUES (?, ?, ?, ?, ?, ?, NOW())",
+                "INSERT INTO partner_order_audit(partner_order_id, partner_id, actor_user_id, from_status, to_status, reason, idempotency_key, correlation_id, command_type, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())",
                 partnerOrderId, partnerId, actorUserId,
                 fromStatus != null ? fromStatus.name() : null,
                 toStatus != null ? toStatus.name() : null,
-                reason);
+                reason, idempotencyKey, correlationId, commandType);
     }
 
     private Long currentUserId() {
@@ -444,8 +471,11 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     }
 
     private interface CommandExecutor {
-        PartnerOrderResponse execute();
+        PartnerOrderResponse execute(CommandContext ctx);
     }
+
+    private record CommandContext(Long partnerOrderId, Long partnerId, String commandType,
+                                   String idempotencyKey, String correlationId) {}
 
     private record CommandRow(String hash, String response, String status) {}
 

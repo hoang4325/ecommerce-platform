@@ -63,31 +63,24 @@ public class SettlementServiceImpl implements SettlementService {
             }
         }
 
-        // Atomic creation: use INSERT ... ON DUPLICATE KEY UPDATE via JDBC to prevent race
-        Long settlementId = jdbc.query(
-                "SELECT id FROM settlements WHERE partner_id=? AND period_start=? AND period_end=? AND currency=? FOR UPDATE",
-                rs -> rs.next() ? rs.getLong("id") : null,
+        // Atomic upsert: INSERT ... ON DUPLICATE KEY UPDATE prevents race on non-existent rows
+        jdbc.update(
+                "INSERT INTO settlements(partner_id, period_start, period_end, currency, status, gross_sales, " +
+                "commission_amount, refund_amount, manual_adjustment, payable_amount, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, 'OPEN', 0, 0, 0, 0, 0, 0, CURRENT_TIMESTAMP(6), CURRENT_TIMESTAMP(6)) " +
+                "ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id)",
                 partnerId, periodStart, periodEnd, resolvedCurrency);
 
-        Settlement settlement;
-        if (settlementId != null) {
-            settlement = settlementRepository.findById(settlementId)
-                    .orElseThrow(() -> new IllegalStateException("settlement_vanished_after_lock"));
-            if (settlement.getStatus() == SettlementStatus.CALCULATED
-                    || settlement.getStatus() == SettlementStatus.UNDER_REVIEW
-                    || settlement.getStatus() == SettlementStatus.APPROVED
-                    || settlement.getStatus() == SettlementStatus.PAID) {
-                throw new ConflictException("settlement_already_calculated");
-            }
-        } else {
-            settlement = new Settlement();
-            settlement.setPartner(new com.yashmerino.ecommerce.model.partner.Partner());
-            settlement.getPartner().setId(partnerId);
-            settlement.setPeriodStart(periodStart);
-            settlement.setPeriodEnd(periodEnd);
-            settlement.setCurrency(resolvedCurrency);
-            settlement.setStatus(SettlementStatus.OPEN);
-            settlement = settlementRepository.save(settlement);
+        Long settlementId = jdbc.queryForObject("SELECT LAST_INSERT_ID()", Long.class);
+
+        Settlement settlement = settlementRepository.findById(settlementId)
+                .orElseThrow(() -> new IllegalStateException("settlement_vanished"));
+
+        if (settlement.getStatus() == SettlementStatus.CALCULATED
+                || settlement.getStatus() == SettlementStatus.UNDER_REVIEW
+                || settlement.getStatus() == SettlementStatus.APPROVED
+                || settlement.getStatus() == SettlementStatus.PAID) {
+            throw new ConflictException("settlement_already_calculated");
         }
 
         settlement.setStatus(SettlementStatus.CALCULATED);
@@ -120,30 +113,42 @@ public class SettlementServiceImpl implements SettlementService {
             settlementLineRepository.save(line);
         }
 
-        // Claim pending adjustments
+        // Claim pending adjustments with partial lifecycle support
         BigDecimal carryForwardAmount = BigDecimal.ZERO;
+        BigDecimal currentPayable = grossSales.subtract(commissionAmount);
         List<PendingAdjustmentRow> pendings = jdbc.query(
-                "SELECT id,amount,idempotency_key FROM pending_settlement_adjustments " +
+                "SELECT id,amount,idempotency_key,version FROM pending_settlement_adjustments " +
                 "WHERE partner_id=? AND currency=? AND status='PENDING' ORDER BY id FOR UPDATE",
-                (rs, n) -> new PendingAdjustmentRow(rs.getLong("id"), rs.getBigDecimal("amount"), rs.getString("idempotency_key")),
+                (rs, n) -> new PendingAdjustmentRow(rs.getLong("id"), rs.getBigDecimal("amount"), rs.getString("idempotency_key"), rs.getLong("version")),
                 partnerId, resolvedCurrency);
 
         for (PendingAdjustmentRow p : pendings) {
+            BigDecimal maximumApplicable = currentPayable.max(BigDecimal.ZERO);
+            BigDecimal appliedAmount = p.amount().compareTo(BigDecimal.ZERO) >= 0
+                    ? p.amount().min(maximumApplicable)
+                    : p.amount().max(maximumApplicable.negate());
+            BigDecimal remainingAmount = p.amount().subtract(appliedAmount);
+
             SettlementLine line = new SettlementLine();
             line.setSettlement(settlement);
             line.setPartner(settlement.getPartner());
             line.setLineType("CARRY_FORWARD");
-            line.setAmount(p.amount());
+            line.setAmount(appliedAmount);
             line.setCurrency(resolvedCurrency);
             line.setIdempotencyKey("CARRY_FORWARD:" + p.id());
             settlementLineRepository.save(line);
 
-            carryForwardAmount = carryForwardAmount.add(p.amount());
+            carryForwardAmount = carryForwardAmount.add(appliedAmount);
+            currentPayable = currentPayable.add(appliedAmount);
 
-            jdbc.update("UPDATE pending_settlement_adjustments SET " +
-                            "status='APPLIED',claimed_settlement_id=?,applied_line_id=?,updated_at=CURRENT_TIMESTAMP(6),version=version+1 " +
-                            "WHERE id=? AND status='PENDING'",
-                    settlement.getId(), line.getId(), p.id());
+            String newStatus = remainingAmount.compareTo(BigDecimal.ZERO) == 0 ? "APPLIED" : "PARTIALLY_APPLIED";
+            int changed = jdbc.update(
+                    "UPDATE pending_settlement_adjustments SET status=?, claimed_settlement_id=?, applied_line_id=?, " +
+                    "applied_amount=?, remaining_amount=?, updated_at=CURRENT_TIMESTAMP(6), version=version+1 " +
+                    "WHERE id=? AND status='PENDING' AND version=?",
+                    newStatus, settlement.getId(), line.getId(), appliedAmount, remainingAmount,
+                    p.id(), p.version());
+            if (changed != 1) throw new ConflictException("pending_adjustment_claim_conflict");
         }
 
         // Full payable formula (Policy B: never negative, carry-forward residual debt)
@@ -288,5 +293,5 @@ public class SettlementServiceImpl implements SettlementService {
         return SettlementResponse.from(settlement);
     }
 
-    record PendingAdjustmentRow(Long id, BigDecimal amount, String idempotencyKey) {}
+    record PendingAdjustmentRow(Long id, BigDecimal amount, String idempotencyKey, Long version) {}
 }

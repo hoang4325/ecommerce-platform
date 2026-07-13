@@ -164,7 +164,7 @@ class RefundResultV2ConsumerTest {
 
         verify(jdbc, never()).update(startsWith("UPDATE settlements SET"), any(), any(), anyLong());
         verify(jdbc).update(startsWith("INSERT INTO pending_settlement_adjustments"),
-                eq(40L), eq(300L), eq(1L), eq(1L), any(java.math.BigDecimal.class), eq("EUR"), eq("REFUND_CF:1:300"));
+                eq(40L), eq(300L), eq(1L), eq(1L), any(java.math.BigDecimal.class), any(java.math.BigDecimal.class), eq("EUR"), eq("REFUND_CF:1:300"));
     }
 
     @Test

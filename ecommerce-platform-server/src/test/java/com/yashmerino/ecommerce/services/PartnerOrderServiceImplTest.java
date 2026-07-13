@@ -166,19 +166,19 @@ class PartnerOrderServiceImplTest {
         doThrow(new DuplicateKeyException("duplicate"))
                 .when(jdbc).update(startsWith("INSERT INTO partner_order_commands"),
                         eq(ORDER_ID), eq(PARTNER_ID), eq("REJECT"), eq(IDEMPOTENCY_KEY), anyString());
-        when(jdbc.query(startsWith("SELECT request_hash"), any(RowMapper.class), eq(IDEMPOTENCY_KEY), eq(ORDER_ID)))
+        when(jdbc.query(startsWith("SELECT request_hash"), any(RowMapper.class), eq(IDEMPOTENCY_KEY), eq(ORDER_ID), eq("REJECT")))
                 .thenAnswer(invocation -> {
                     @SuppressWarnings("unchecked")
                     RowMapper<Object> mapper = invocation.getArgument(1);
                     java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
-                    when(rs.getString("request_hash")).thenReturn(hash(ORDER_ID + "|REJECT|" + IDEMPOTENCY_KEY));
+                    when(rs.getString("request_hash")).thenReturn(hash(ORDER_ID + "|REJECT|reason=same payload"));
                     when(rs.getString("response_snapshot")).thenReturn(null);
                     when(rs.getString("status")).thenReturn("PENDING");
                     return List.of(mapper.mapRow(rs, 0));
                 });
 
         assertThrows(ConflictException.class,
-                () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "Changed reason", IDEMPOTENCY_KEY));
+                () -> partnerOrderService.rejectOrder(PARTNER_ID, ORDER_ID, "same payload", IDEMPOTENCY_KEY));
 
         verify(jdbc, never()).update(startsWith("UPDATE partner_orders SET status=?"), any(), any(), anyLong(), any(), anyLong());
     }

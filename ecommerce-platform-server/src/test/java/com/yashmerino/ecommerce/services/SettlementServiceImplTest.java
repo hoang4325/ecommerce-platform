@@ -134,6 +134,18 @@ class SettlementServiceImplTest {
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
         lenient().when(partnerOrderRepository.markAsSettled(anyLong(), anyList())).thenReturn(2);
 
+        // Atomic upsert mocks
+        lenient().when(jdbc.update(startsWith("INSERT INTO settlements"), any(), any(), any(), any())).thenReturn(1);
+        lenient().when(jdbc.queryForObject(eq("SELECT LAST_INSERT_ID()"), eq(Long.class))).thenReturn(SETTLEMENT_ID);
+        Settlement openSettlement = new Settlement();
+        openSettlement.setId(SETTLEMENT_ID);
+        openSettlement.setPartner(partner);
+        openSettlement.setPeriodStart(periodStart);
+        openSettlement.setPeriodEnd(periodEnd);
+        openSettlement.setCurrency("USD");
+        openSettlement.setStatus(SettlementStatus.OPEN);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
+
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
         assertNotNull(response);
@@ -161,6 +173,18 @@ class SettlementServiceImplTest {
         lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
                 eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of());
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), any(), any());
+
+        // Atomic upsert mocks
+        lenient().when(jdbc.update(startsWith("INSERT INTO settlements"), any(), any(), any(), any())).thenReturn(1);
+        lenient().when(jdbc.queryForObject(eq("SELECT LAST_INSERT_ID()"), eq(Long.class))).thenReturn(SETTLEMENT_ID);
+        Settlement openSettlement = new Settlement();
+        openSettlement.setId(SETTLEMENT_ID);
+        openSettlement.setPartner(partner);
+        openSettlement.setPeriodStart(periodStart);
+        openSettlement.setPeriodEnd(periodEnd);
+        openSettlement.setCurrency("USD");
+        openSettlement.setStatus(SettlementStatus.OPEN);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
@@ -212,6 +236,18 @@ class SettlementServiceImplTest {
         lenient().doReturn(List.of()).when(jdbc).query(anyString(), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
         lenient().when(partnerOrderRepository.markAsSettled(anyLong(), anyList())).thenReturn(1);
 
+        // Atomic upsert mocks
+        lenient().when(jdbc.update(startsWith("INSERT INTO settlements"), any(), any(), any(), any())).thenReturn(1);
+        lenient().when(jdbc.queryForObject(eq("SELECT LAST_INSERT_ID()"), eq(Long.class))).thenReturn(SETTLEMENT_ID);
+        Settlement openSettlement = new Settlement();
+        openSettlement.setId(SETTLEMENT_ID);
+        openSettlement.setPartner(partner);
+        openSettlement.setPeriodStart(periodStart);
+        openSettlement.setPeriodEnd(periodEnd);
+        openSettlement.setCurrency("USD");
+        openSettlement.setStatus(SettlementStatus.OPEN);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
+
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
         assertEquals(new BigDecimal("100.00"), response.grossSales());
@@ -235,14 +271,33 @@ class SettlementServiceImplTest {
         lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
         lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
                 eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of());
-        lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(300L, new BigDecimal("-25.00"), "adj-300")))
+        lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(300L, new BigDecimal("-25.00"), "adj-300", 1L)))
                 .when(jdbc).query(contains("pending_settlement_adjustments"), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
+
+        // Mock the UPDATE that claims the pending adjustment (PARTIALLY_APPLIED with appliedAmount=0)
+        lenient().when(jdbc.update(contains("UPDATE pending_settlement_adjustments SET status="),
+                anyString(), anyLong(), any(), any(java.math.BigDecimal.class), any(java.math.BigDecimal.class),
+                eq(300L), eq(1L))).thenReturn(1);
+
+        // Atomic upsert mocks
+        lenient().when(jdbc.update(startsWith("INSERT INTO settlements"), any(), any(), any(), any())).thenReturn(1);
+        lenient().when(jdbc.queryForObject(eq("SELECT LAST_INSERT_ID()"), eq(Long.class))).thenReturn(SETTLEMENT_ID);
+        Settlement openSettlement = new Settlement();
+        openSettlement.setId(SETTLEMENT_ID);
+        openSettlement.setPartner(partner);
+        openSettlement.setPeriodStart(periodStart);
+        openSettlement.setPeriodEnd(periodEnd);
+        openSettlement.setCurrency("USD");
+        openSettlement.setStatus(SettlementStatus.OPEN);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
         assertEquals(BigDecimal.ZERO, response.payableAmount());
-        verify(jdbc).update(startsWith("INSERT INTO pending_settlement_adjustments"),
-                eq(PARTNER_ID), eq(new BigDecimal("-25.00")), eq("USD"), eq("RESIDUAL_DEBT:" + SETTLEMENT_ID));
+        verify(jdbc).update(contains("UPDATE pending_settlement_adjustments SET status="),
+                eq("PARTIALLY_APPLIED"), eq(SETTLEMENT_ID), isNull(),
+                eq(java.math.BigDecimal.ZERO), eq(new BigDecimal("-25.00")),
+                eq(300L), eq(1L));
     }
 
     @Test
