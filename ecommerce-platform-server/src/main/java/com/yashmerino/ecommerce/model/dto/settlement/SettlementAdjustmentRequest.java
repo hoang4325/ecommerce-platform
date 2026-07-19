@@ -7,5 +7,6 @@ import java.math.BigDecimal;
 
 public record SettlementAdjustmentRequest(
         @NotNull BigDecimal amount,
-        @NotBlank String reason) {
+        @NotBlank String reason,
+        String idempotencyKey) {
 }

@@ -142,16 +142,25 @@ class RefundResultV2ConsumerTest {
         when(orderRepository.updateOrderStatusAndVersion(1L, OrderStatus.REFUND_PENDING, OrderStatus.REFUNDED, 1L)).thenReturn(1);
         when(paymentRepository.updateStatusAndVersion(10L, PaymentStatus.REFUND_PENDING, PaymentStatus.REFUNDED, 1L)).thenReturn(1);
         when(jdbc.queryForObject(startsWith("SELECT user_id FROM orders"), eq(Long.class), eq(1L))).thenReturn(99L);
-        when(jdbc.query(contains("FROM partner_orders po LEFT JOIN settlements"), any(org.springframework.jdbc.core.RowMapper.class), eq(1L)))
+        when(jdbc.query(contains("LEFT JOIN settlements s ON s.id = po.settlement_id"), any(org.springframework.jdbc.core.RowMapper.class), eq(1L)))
                 .thenAnswer(invocation -> {
                     @SuppressWarnings("unchecked")
                     org.springframework.jdbc.core.RowMapper<Object> mapper = invocation.getArgument(1);
                     java.sql.ResultSet rs = mock(java.sql.ResultSet.class);
-                    when(rs.getLong("id")).thenReturn(300L);
+                    when(rs.getLong("order_item_id")).thenReturn(1L);
+                    when(rs.getLong("partner_order_id")).thenReturn(300L);
                     when(rs.getLong("partner_id")).thenReturn(40L);
-                    when(rs.getBigDecimal("subtotal")).thenReturn(new java.math.BigDecimal("100.00"));
+                    when(rs.getBigDecimal("unit_price")).thenReturn(new java.math.BigDecimal("100.00"));
+                    when(rs.getInt("quantity")).thenReturn(1);
+                    when(rs.getBigDecimal("line_total")).thenReturn(new java.math.BigDecimal("100.00"));
+                    when(rs.getBigDecimal("coupon_discount_allocation")).thenReturn(java.math.BigDecimal.ZERO);
+                    when(rs.getBigDecimal("redeemed_point_allocation")).thenReturn(java.math.BigDecimal.ZERO);
                     when(rs.getBigDecimal("commission_amount")).thenReturn(new java.math.BigDecimal("10.00"));
                     when(rs.getBigDecimal("partner_payable_amount")).thenReturn(new java.math.BigDecimal("90.00"));
+                    when(rs.getString("currency")).thenReturn("EUR");
+                    when(rs.getBigDecimal("po_subtotal")).thenReturn(new java.math.BigDecimal("100.00"));
+                    when(rs.getBigDecimal("po_commission")).thenReturn(new java.math.BigDecimal("10.00"));
+                    when(rs.getBigDecimal("po_payable")).thenReturn(new java.math.BigDecimal("90.00"));
                     when(rs.getObject("settlement_id", Long.class)).thenReturn(500L);
                     when(rs.getString("settlement_status")).thenReturn("SETTLED");
                     when(rs.getString("set_status")).thenReturn("APPROVED");

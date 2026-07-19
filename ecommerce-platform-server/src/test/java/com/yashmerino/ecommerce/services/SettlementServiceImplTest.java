@@ -28,6 +28,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.ResultSetExtractor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -146,6 +147,8 @@ class SettlementServiceImplTest {
         openSettlement.setStatus(SettlementStatus.OPEN);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
 
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(openSettlement);
+
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
         assertNotNull(response);
@@ -185,6 +188,8 @@ class SettlementServiceImplTest {
         openSettlement.setCurrency("USD");
         openSettlement.setStatus(SettlementStatus.OPEN);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
+
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(openSettlement);
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
@@ -248,6 +253,8 @@ class SettlementServiceImplTest {
         openSettlement.setStatus(SettlementStatus.OPEN);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
 
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(openSettlement);
+
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
         assertEquals(new BigDecimal("100.00"), response.grossSales());
@@ -271,7 +278,10 @@ class SettlementServiceImplTest {
         lenient().when(jdbc.query(anyString(), any(org.springframework.jdbc.core.ResultSetExtractor.class), any(), any(), any(), any())).thenReturn(null);
         lenient().when(partnerOrderRepository.findByPartnerIdAndStatusAndDeliveredAtInRangeAndCurrencyAndUnsettledForUpdate(
                 eq(PARTNER_ID), any(), any(), any(), any())).thenReturn(List.of());
-        lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(300L, new BigDecimal("-25.00"), "adj-300", 1L)))
+        lenient().doReturn(List.of(new SettlementServiceImpl.PendingAdjustmentRow(
+                300L, new BigDecimal("-25.00"), new BigDecimal("-25.00"),
+                BigDecimal.ZERO, new BigDecimal("25.00"), new BigDecimal("-25.00"),
+                "adj-300", 1L, "PENDING")))
                 .when(jdbc).query(contains("pending_settlement_adjustments"), any(org.springframework.jdbc.core.RowMapper.class), eq(PARTNER_ID), eq("USD"));
 
         // Mock the UPDATE that claims the pending adjustment (PARTIALLY_APPLIED with appliedAmount=0)
@@ -290,6 +300,8 @@ class SettlementServiceImplTest {
         openSettlement.setCurrency("USD");
         openSettlement.setStatus(SettlementStatus.OPEN);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(openSettlement));
+
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(openSettlement);
 
         var response = settlementService.calculateSettlement(PARTNER_ID, periodStart, periodEnd, "USD");
 
@@ -340,22 +352,29 @@ class SettlementServiceImplTest {
         settlement.setStatus(SettlementStatus.CALCULATED);
         User admin = new User();
         admin.setId(2L);
-        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        Settlement approvedSettlement = new Settlement();
+        approvedSettlement.setId(SETTLEMENT_ID);
+        approvedSettlement.setPartner(partner);
+        approvedSettlement.setStatus(SettlementStatus.APPROVED);
+        approvedSettlement.setApprovedAt(java.time.LocalDateTime.now());
+        approvedSettlement.setApprovedBy(admin);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(approvedSettlement));
         lenient().when(authz.getCurrentUser()).thenReturn(admin);
         lenient().when(settlementRepository.save(any(Settlement.class))).thenReturn(settlement);
+        lenient().when(jdbc.update(startsWith("UPDATE settlements SET status='APPROVED'"), any(), anyLong(), any())).thenReturn(1);
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(settlement);
 
         var response = settlementService.approveSettlement(SETTLEMENT_ID);
 
         assertEquals(SettlementStatus.APPROVED, response.status());
-        assertNotNull(settlement.getApprovedAt());
-        assertNotNull(settlement.getApprovedBy());
-        verify(settlementRepository).save(settlement);
+        assertNotNull(response.approvedAt());
     }
 
     @Test
     void approveSettlement_WrongStatus_ThrowsInvalidInput() {
         settlement.setStatus(SettlementStatus.PAID);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(settlement);
 
         assertThrows(InvalidInputException.class, () -> settlementService.approveSettlement(SETTLEMENT_ID));
     }
@@ -370,9 +389,26 @@ class SettlementServiceImplTest {
         admin.setId(2L);
 
         SettlementAdjustmentRequest adjustmentRequest = new SettlementAdjustmentRequest(
-                new BigDecimal("25.00"), "Shipping credit");
+                new BigDecimal("25.00"), "Shipping credit", null);
 
-        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        Settlement adjSettlement = new Settlement();
+        adjSettlement.setId(SETTLEMENT_ID);
+        adjSettlement.setPartner(partner);
+        adjSettlement.setCurrency("USD");
+        adjSettlement.setPayableAmount(new BigDecimal("100.00"));
+        adjSettlement.setManualAdjustment(BigDecimal.ZERO);
+        adjSettlement.setStatus(SettlementStatus.CALCULATED);
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(adjSettlement);
+        lenient().when(jdbc.update(startsWith("UPDATE settlements SET manual_adjustment=?"), any(), any(), anyLong(), any())).thenReturn(1);
+
+        Settlement savedAdj = new Settlement();
+        savedAdj.setId(SETTLEMENT_ID);
+        savedAdj.setPartner(partner);
+        savedAdj.setCurrency("USD");
+        savedAdj.setPayableAmount(new BigDecimal("125.00"));
+        savedAdj.setManualAdjustment(new BigDecimal("25.00"));
+        savedAdj.setStatus(SettlementStatus.CALCULATED);
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(savedAdj));
         lenient().when(authz.getCurrentUser()).thenReturn(admin);
         lenient().when(settlementRepository.save(any(Settlement.class))).thenReturn(settlement);
         lenient().when(settlementLineRepository.save(any(SettlementLine.class))).thenReturn(null);
@@ -389,9 +425,10 @@ class SettlementServiceImplTest {
     void addAdjustment_WrongStatus_ThrowsInvalidInput() {
         settlement.setStatus(SettlementStatus.PAID);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(settlement);
 
         SettlementAdjustmentRequest req = new SettlementAdjustmentRequest(
-                new BigDecimal("10.00"), "adjustment");
+                new BigDecimal("10.00"), "adjustment", null);
 
         assertThrows(InvalidInputException.class, () -> settlementService.addAdjustment(SETTLEMENT_ID, req));
     }
@@ -399,21 +436,30 @@ class SettlementServiceImplTest {
     @Test
     void markPaid_Success() {
         settlement.setStatus(SettlementStatus.APPROVED);
-        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        Settlement paidSettlement = new Settlement();
+        paidSettlement.setId(SETTLEMENT_ID);
+        paidSettlement.setPartner(partner);
+        paidSettlement.setPayableAmount(new BigDecimal("90.00"));
+        paidSettlement.setStatus(SettlementStatus.PAID);
+        paidSettlement.setPaidAt(java.time.LocalDateTime.now());
+        paidSettlement.setPaymentReference("PAY-REF-001");
+        lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(paidSettlement));
         lenient().when(settlementRepository.save(any(Settlement.class))).thenReturn(settlement);
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(settlement);
+        lenient().when(jdbc.update(startsWith("UPDATE settlements SET status='PAID'"), any(), anyLong(), any())).thenReturn(1);
 
         var response = settlementService.markPaid(SETTLEMENT_ID, "PAY-REF-001");
 
         assertEquals(SettlementStatus.PAID, response.status());
-        assertNotNull(settlement.getPaidAt());
-        assertEquals("PAY-REF-001", settlement.getPaymentReference());
-        verify(settlementRepository).save(settlement);
+        assertNotNull(response.paidAt());
+        assertEquals("PAY-REF-001", response.paymentReference());
     }
 
     @Test
     void markPaid_WrongStatus_ThrowsInvalidInput() {
         settlement.setStatus(SettlementStatus.CALCULATED);
         lenient().when(settlementRepository.findById(SETTLEMENT_ID)).thenReturn(Optional.of(settlement));
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(SETTLEMENT_ID))).thenReturn(settlement);
 
         assertThrows(InvalidInputException.class,
                 () -> settlementService.markPaid(SETTLEMENT_ID, "PAY-REF"));
@@ -421,7 +467,8 @@ class SettlementServiceImplTest {
 
     @Test
     void markPaid_NotFound_ThrowsEntityNotFound() {
-        when(settlementRepository.findById(999L)).thenReturn(Optional.empty());
+        lenient().when(jdbc.query(anyString(), any(ResultSetExtractor.class), eq(999L)))
+                .thenThrow(new EntityNotFoundException("settlement_not_found"));
 
         assertThrows(EntityNotFoundException.class,
                 () -> settlementService.markPaid(999L, "PAY-REF"));
