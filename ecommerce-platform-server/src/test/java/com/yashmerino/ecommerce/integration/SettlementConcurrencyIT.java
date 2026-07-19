@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class SettlementConcurrencyIntegrationTest extends MySqlIntegrationTestBase {
+class SettlementConcurrencyIT extends MySqlIntegrationTestBase {
 
     @Autowired
     private JdbcTemplate jdbc;

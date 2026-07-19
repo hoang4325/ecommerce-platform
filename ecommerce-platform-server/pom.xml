@@ -171,10 +171,10 @@
                 <version>3.2.5</version>
                 <configuration>
                     <excludes>
-                        <exclude>**/*IntegrationTest.java</exclude>
                         <exclude>**/*IT.java</exclude>
-                        <exclude>**/Phase1MigrationMySqlTest.java</exclude>
-                        <exclude>**/Phase2MigrationMySqlTest.java</exclude>
+                        <exclude>**/*ITCase.java</exclude>
+                        <exclude>**/Phase1MigrationMySqlIT.java</exclude>
+                        <exclude>**/Phase2MigrationMySqlIT.java</exclude>
                     </excludes>
                 </configuration>
             </plugin>
@@ -184,8 +184,8 @@
                 <version>3.2.5</version>
                 <configuration>
                     <includes>
-                        <include>**/*IntegrationTest.java</include>
                         <include>**/*IT.java</include>
+                        <include>**/*ITCase.java</include>
                     </includes>
                     <reportNameSuffix>failsafe</reportNameSuffix>
                 </configuration>

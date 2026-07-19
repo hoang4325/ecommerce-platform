@@ -6,9 +6,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 REQUIRED_TEST_PREFIXES = [
-    "CheckoutFlowIntegrationTest",
-    "RefundSettlementIntegrationTest",
-    "SettlementConcurrencyIntegrationTest",
+    "CheckoutFlowIT",
+    "RefundSettlementIT",
+    "SettlementConcurrencyIT",
 ]
 
 def check_report(file: Path) -> int:
@@ -42,6 +42,11 @@ def main():
     if surefire.exists():
         for xml_file in sorted(surefire.glob("TEST-*.xml")):
             exit_code |= check_report(xml_file)
+            # Ensure no IT tests leaked into surefire
+            for prefix in REQUIRED_TEST_PREFIXES:
+                if prefix in xml_file.name:
+                    print(f"  FAIL: Integration test '{prefix}' found in surefire-reports (should be in failsafe)")
+                    exit_code = 1
     else:
         print("  MISSING: surefire-reports directory not found")
         exit_code = 1
