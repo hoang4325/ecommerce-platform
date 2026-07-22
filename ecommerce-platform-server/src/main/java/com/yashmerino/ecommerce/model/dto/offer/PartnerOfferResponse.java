@@ -10,6 +10,7 @@ public record PartnerOfferResponse(
         Long id,
         Long partnerId,
         Long productId,
+        String productName,
         String partnerSku,
         BigDecimal price,
         String currency,
@@ -26,6 +27,7 @@ public record PartnerOfferResponse(
     public static PartnerOfferResponse from(PartnerOffer offer) {
         return new PartnerOfferResponse(
                 offer.getId(), offer.getPartner().getId(), offer.getProduct().getId(),
+                offer.getProduct().getName(),
                 offer.getPartnerSku(), offer.getPrice(), offer.getCurrency(),
                 offer.getOnHandQuantity(), offer.getReservedQuantity(),
                 offer.getStatus(), offer.getApprovedAt(), offer.getSubmittedAt(),

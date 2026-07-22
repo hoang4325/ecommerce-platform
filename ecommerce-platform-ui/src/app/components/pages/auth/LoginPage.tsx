@@ -67,8 +67,11 @@ const LoginPage = () => {
       dispatch(updateJwt(response.accessToken));
       dispatch(updateRefreshToken(response.refreshToken));
       dispatch(updateUsername(parseJwt(response.accessToken).sub));
-      dispatch(updateInfo(await UserRequest.getUserInfo(username ?? "")));
-      navigate("/products");
+      const userInfo = await UserRequest.getUserInfo(username ?? "");
+      dispatch(updateInfo(userInfo));
+      const isAdmin = userInfo.roles?.some(r => r.name === 'ROLE_ADMIN');
+      const isPartner = userInfo.roles?.some(r => r.name === 'ROLE_PARTNER');
+      navigate(isAdmin ? "/admin/dashboard" : isPartner ? "/partner/dashboard" : "/products");
     } else {
       response.fieldErrors && setInputErrors(response.fieldErrors);
     }

@@ -8,11 +8,18 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/admin/partners/{partnerId}/documents")
 @RequiredArgsConstructor
 public class AdminPartnerDocumentController {
     private final PartnerDocumentService service;
+
+    @GetMapping
+    public ResponseEntity<List<PartnerDocumentResponse>> list(@PathVariable Long partnerId) {
+        return ResponseEntity.ok(service.listForAdmin(partnerId));
+    }
 
     @PostMapping("/{documentId}/review")
     public ResponseEntity<PartnerDocumentResponse> review(@PathVariable Long partnerId,

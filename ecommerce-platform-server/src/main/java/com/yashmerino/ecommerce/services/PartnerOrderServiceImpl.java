@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yashmerino.ecommerce.exceptions.ConflictException;
 import com.yashmerino.ecommerce.exceptions.InvalidInputException;
+import com.yashmerino.ecommerce.model.dto.order.PartnerOrderItemResponse;
 import com.yashmerino.ecommerce.model.dto.order.PartnerOrderResponse;
 import com.yashmerino.ecommerce.model.order.PartnerOrder;
 import com.yashmerino.ecommerce.model.order.PartnerOrderStatus;
@@ -88,7 +89,7 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     @Transactional(readOnly = true)
     public PartnerOrderResponse getPartnerOrder(Long partnerId, Long partnerOrderId) {
         authz.requireOrderRead(partnerId);
-        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId));
+        return PartnerOrderResponse.from(fetchEntity(partnerId, partnerOrderId), fetchItems(partnerId, partnerOrderId));
     }
 
     @Override
@@ -443,6 +444,33 @@ public class PartnerOrderServiceImpl implements PartnerOrderService {
     private PartnerOrder fetchEntity(Long partnerId, Long partnerOrderId) {
         return partnerOrderRepository.findByIdAndPartnerId(partnerOrderId, partnerId)
                 .orElseThrow(() -> new EntityNotFoundException("partner_order_not_found"));
+    }
+
+    private List<PartnerOrderItemResponse> fetchItems(Long partnerId, Long partnerOrderId) {
+        return jdbc.query(
+                "SELECT oi.id, oi.product_id, oi.offer_id, oi.name, oi.partner_sku, oi.unit_price, " +
+                        "oi.quantity, oi.line_total, " +
+                        "COALESCE(oi.discount_allocation, oi.coupon_discount_allocation + oi.redeemed_point_allocation + oi.order_discount_allocation, 0) AS discount_allocation, " +
+                        "COALESCE(oi.commission_amount, 0) AS commission_amount, " +
+                        "COALESCE(oi.partner_payable_amount, oi.line_total, 0) AS partner_payable_amount, " +
+                        "oi.currency " +
+                        "FROM order_items oi " +
+                        "WHERE oi.partner_order_id=? AND oi.partner_id=? " +
+                        "ORDER BY oi.id",
+                (rs, n) -> new PartnerOrderItemResponse(
+                        rs.getLong("id"),
+                        rs.getObject("product_id", Long.class),
+                        rs.getObject("offer_id", Long.class),
+                        rs.getString("name"),
+                        rs.getString("partner_sku"),
+                        rs.getBigDecimal("unit_price"),
+                        rs.getInt("quantity"),
+                        rs.getBigDecimal("line_total"),
+                        rs.getBigDecimal("discount_allocation"),
+                        rs.getBigDecimal("commission_amount"),
+                        rs.getBigDecimal("partner_payable_amount"),
+                        rs.getString("currency")),
+                partnerOrderId, partnerId);
     }
 
     private static LocalDateTime nullableTimestamp(ResultSet rs, String column) throws SQLException {

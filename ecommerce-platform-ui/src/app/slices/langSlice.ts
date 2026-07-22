@@ -4,7 +4,7 @@ import Lang from '../../i18n/LangEnum';
 import { getCookie } from '../utils/Utils';
 
 const initialState = {
-    lang: getCookie("ecommerce-platform-lang") as Lang || Lang.ENG
+    lang: getCookie("ecommerce-platform-lang") as Lang || Lang.VI
 }
 
 export const langSlice = createSlice({

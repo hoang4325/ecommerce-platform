@@ -64,6 +64,7 @@ const EditProductPage = () => {
     const lang = useAppSelector(state => state.lang.lang);
     const roles = useAppSelector(state => state.info.info.roles);
     const jwt = useAppSelector(state => state.jwt);
+    const isSeller = roles.some(role => role.name?.replace(/^ROLE_/, '') === 'SELLER');
 
     const [name, setName] = React.useState(location.state ? location.state.title : "default");
     const [description, setDescription] = React.useState(location.state ? location.state.description : "default");
@@ -200,8 +201,7 @@ const EditProductPage = () => {
                     </Typography>
                 </Box>
 
-                {// @ts-ignore 
-                    roles[0].name === "SELLER" ? (
+                {isSeller ? (
                         <Paper 
                             elevation={2} 
                             sx={{ 

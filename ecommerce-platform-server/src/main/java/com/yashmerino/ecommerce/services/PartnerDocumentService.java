@@ -31,6 +31,11 @@ public class PartnerDocumentService {
         return repository.findByPartnerId(partnerId).stream().map(PartnerDocumentResponse::from).toList();
     }
 
+    @Transactional(readOnly = true)
+    public List<PartnerDocumentResponse> listForAdmin(Long partnerId) {
+        return repository.findByPartnerId(partnerId).stream().map(PartnerDocumentResponse::from).toList();
+    }
+
     @Transactional
     public PartnerDocumentResponse create(Long partnerId, PartnerDocumentRequest request) {
         authz.requireMembership(partnerId);

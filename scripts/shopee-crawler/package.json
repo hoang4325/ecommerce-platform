@@ -1,0 +1,16 @@
+{
+  "name": "shopee-crawler",
+  "version": "1.0.0",
+  "description": "Shopee VN product and shop scraper using Playwright",
+  "main": "crawler.js",
+  "type": "module",
+  "scripts": {
+    "start": "node crawler.js",
+    "scrape:login": "node scrape-with-login.js"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0",
+    "playwright-extra": "^4.3.6",
+    "playwright-extra-plugin-stealth": "^0.0.1"
+  }
+}

@@ -1,0 +1,23 @@
+- generic [ref=f2e5]:
+  - generic [ref=f2e7]:
+    - heading "Đăng nhập" [level=1] [ref=f2e11]
+    - generic [ref=f2e12]:
+      - generic [ref=f2e13]:
+        - generic [ref=f2e14]:
+          - text: Tên đăng nhập
+          - generic [ref=f2e15]: "*"
+        - generic [ref=f2e16]:
+          - textbox "Tên đăng nhập" [ref=f2e17]: admin
+          - group:
+            - generic: Tên đăng nhập *
+      - generic [ref=f2e18]:
+        - generic [ref=f2e24]:
+          - text: Mật khẩu
+          - generic [ref=f2e25]: "*"
+        - generic [ref=f2e19]:
+          - textbox "Mật khẩu" [ref=f2e20]: "123456"
+          - group:
+            - generic: Mật khẩu *
+      - button "Đăng nhập" [active] [ref=f2e21] [cursor=pointer]
+  - link "Chưa có tài khoản? Đăng ký" [ref=f2e23] [cursor=pointer]:
+    - /url: "#/register"

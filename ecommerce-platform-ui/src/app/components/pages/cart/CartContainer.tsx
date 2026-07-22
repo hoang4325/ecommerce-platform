@@ -47,8 +47,21 @@ export interface CartItem {
   quantity: number;
 }
 
+const formatVnd = (value: number | string) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND',
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
+
 const CartContainer = () => {
-  const MIN_TOTAL = 0.5;
+  const MIN_TOTAL = 1000;
   const jwt = useAppSelector(state => state.jwt);
   const username = useAppSelector(state => state.username.sub);
   const lang = useAppSelector(state => state.lang.lang);
@@ -146,7 +159,7 @@ const CartContainer = () => {
       setSuccess(null);
 
       if (total < MIN_TOTAL) {
-        setError(getTranslation(lang, "minimum_order_amount") || "Order total must be at least 0.50€.");
+        setError(getTranslation(lang, "minimum_order_amount") || `Order total must be at least ${formatVnd(MIN_TOTAL)}.`);
         setIsLoading(false);
         return;
       }
@@ -200,7 +213,7 @@ const CartContainer = () => {
       const checkoutResponse = await submitCheckout(idempotencyKey, {
         requestedPoints: 0,
         couponCode: null,
-        currency: "EUR",
+        currency: "VND",
       });
 
       if (!checkoutResponse.orderId) {
@@ -344,11 +357,11 @@ const CartContainer = () => {
             <Box sx={{ mb: 3 }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
                 <Typography>{getTranslation(lang, "products_price")}</Typography>
-                <Typography fontWeight={600}>{total.toFixed(2)}€</Typography>
+                <Typography fontWeight={600}>{formatVnd(total)}</Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
                 <Typography>{getTranslation(lang, "delivery_price")}</Typography>
-                <Typography fontWeight={600}>0.00€</Typography>
+                <Typography fontWeight={600}>{formatVnd(0)}</Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
                 <Typography>{getTranslation(lang, "discount")}</Typography>
@@ -357,7 +370,7 @@ const CartContainer = () => {
               <Divider sx={{ my: 2 }} />
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="h6" fontWeight={700}>{getTranslation(lang, "total")}</Typography>
-                <Typography variant="h6" fontWeight={700} color="primary.main">{total.toFixed(2)}€</Typography>
+                <Typography variant="h6" fontWeight={700} color="primary.main">{formatVnd(total)}</Typography>
               </Box>
             </Box>
 
@@ -391,7 +404,7 @@ const CartContainer = () => {
             </Box>
             {total < MIN_TOTAL && (
               <Alert severity="warning" sx={{ mb: 2 }}>
-                {getTranslation(lang, "minimum_order_amount") || "Order total must be at least 0.50€ to checkout."}
+                {getTranslation(lang, "minimum_order_amount") || `Order total must be at least ${formatVnd(MIN_TOTAL)} to checkout.`}
               </Alert>
             )}
             {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}

@@ -46,6 +46,19 @@ interface CartItemProps {
     onUpdate: (id: number, newQuantity: number) => void 
 }
 
+const formatVnd = (value: number | string) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) {
+    return String(value);
+  }
+
+  return new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND',
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
+
 const CartItemCard = ({ id, productId, title, price, quantity, onUpdate }: CartItemProps) => {
   const [photo, setPhoto] = React.useState(NoPhoto);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
@@ -195,7 +208,7 @@ const CartItemCard = ({ id, productId, title, price, quantity, onUpdate }: CartI
                   textAlign: 'right',
                 }}
               >
-                {price + "€"}
+                {formatVnd(price)}
               </Typography>
             </Box>
           </Box>
@@ -225,10 +238,10 @@ const CartItemCard = ({ id, productId, title, price, quantity, onUpdate }: CartI
       {/* Delete Confirmation Dialog */}
       <ConfirmationDialog
         open={deleteDialogOpen}
-        title={getTranslation(lang, 'confirm_delete') || 'Confirm Delete'}
-        message={getTranslation(lang, 'confirm_delete_cart_item') || 'Are you sure you want to remove this item from your cart?'}
-        confirmText={getTranslation(lang, 'delete') || 'Delete'}
-        cancelText={getTranslation(lang, 'cancel') || 'Cancel'}
+        title={getTranslation(lang, 'confirm_delete') || 'Xác nhận xóa'}
+        message={getTranslation(lang, 'confirm_delete_cart_item') || 'Bạn có chắc muốn xóa sản phẩm này khỏi giỏ hàng?'}
+        confirmText={getTranslation(lang, 'delete') || 'Xóa'}
+        cancelText={getTranslation(lang, 'cancel') || 'Hủy'}
         onConfirm={handleDeleteConfirm}
         onCancel={() => setDeleteDialogOpen(false)}
         loading={isDeleting}

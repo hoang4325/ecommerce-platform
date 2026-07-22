@@ -271,14 +271,14 @@ const MyOrdersPage = () => {
                 <Box sx={{ mb: 4, display: 'flex', alignItems: 'center', gap: 2 }}>
                     <ReceiptIcon fontSize="large" color="primary" />
                     <Typography variant="h4" fontWeight={700} color="primary.main">
-                        {getTranslation(lang, 'my_orders') || 'My Orders'}
+                        {getTranslation(lang, 'my_orders') || 'Đơn hàng của tôi'}
                     </Typography>
                 </Box>
 
                 {orders.length === 0 ? (
                     <Paper elevation={0} sx={{ p: 8, textAlign: 'center', borderRadius: 2 }}>
                         <Typography variant="h6" color="text.secondary">
-                            {getTranslation(lang, 'no_orders_found') || 'No orders found'}
+                            {getTranslation(lang, 'no_orders_found') || 'Không tìm thấy đơn hàng'}
                         </Typography>
                     </Paper>
                 ) : (
@@ -287,22 +287,22 @@ const MyOrdersPage = () => {
                             <TableHead>
                                 <TableRow sx={{ bgcolor: 'primary.main' }}>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>
-                                        {getTranslation(lang, 'order_id') || 'Order ID'}
+                                        {getTranslation(lang, 'order_id') || 'Mã đơn hàng'}
                                     </TableCell>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>
-                                        {getTranslation(lang, 'date') || 'Date'}
+                                        {getTranslation(lang, 'date') || 'Ngày'}
                                     </TableCell>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>
-                                        {getTranslation(lang, 'amount') || 'Amount'}
+                                        {getTranslation(lang, 'amount') || 'Số tiền'}
                                     </TableCell>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>
-                                        {getTranslation(lang, 'order_status') || 'Order Status'}
+                                        {getTranslation(lang, 'order_status') || 'Trạng thái đơn hàng'}
                                     </TableCell>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }}>
-                                        {getTranslation(lang, 'payment_status') || 'Payment Status'}
+                                        {getTranslation(lang, 'payment_status') || 'Trạng thái thanh toán'}
                                     </TableCell>
                                     <TableCell sx={{ color: 'white', fontWeight: 'bold' }} align="center">
-                                        {getTranslation(lang, 'actions') || 'Actions'}
+                                        {getTranslation(lang, 'actions') || 'Thao tác'}
                                     </TableCell>
                                 </TableRow>
                             </TableHead>
@@ -328,7 +328,7 @@ const MyOrdersPage = () => {
                                                 />
                                             ) : (
                                                 <Typography variant="body2" color="text.secondary">
-                                                    {getTranslation(lang, 'no_payment') || 'No payment'}
+                                                    {getTranslation(lang, 'no_payment') || 'Chưa thanh toán'}
                                                 </Typography>
                                             )}
                                         </TableCell>
@@ -342,7 +342,7 @@ const MyOrdersPage = () => {
                                                         startIcon={<RefreshIcon />}
                                                         onClick={() => handleRetryClick(order)}
                                                     >
-                                                        {getTranslation(lang, 'retry_payment') || 'Retry Payment'}
+                                                        {getTranslation(lang, 'retry_payment') || 'Thử lại thanh toán'}
                                                     </Button>
                                                 )}
                                                 {(order.orderStatus === 'CREATED' || order.paymentStatus === 'AWAITING_PAYMENT_METHOD') && (
@@ -353,7 +353,7 @@ const MyOrdersPage = () => {
                                                         startIcon={<CancelIcon />}
                                                         onClick={() => handleCancelClick(order)}
                                                     >
-                                                        {getTranslation(lang, 'cancel') || 'Cancel'}
+                                                        {getTranslation(lang, 'cancel') || 'Hủy'}
                                                     </Button>
                                                 )}
                                             </Box>
@@ -383,7 +383,7 @@ const MyOrdersPage = () => {
 
             <Dialog open={retryDialogOpen} onClose={() => !isProcessing && setRetryDialogOpen(false)} maxWidth="sm" fullWidth>
                 <DialogTitle>
-                    {getTranslation(lang, 'retry_payment') || 'Retry Payment'}
+                    {getTranslation(lang, 'retry_payment') || 'Thử lại thanh toán'}
                 </DialogTitle>
                 <DialogContent>
                     {retrySuccess ? (
@@ -407,10 +407,10 @@ const MyOrdersPage = () => {
                                     borderColor: 'divider'
                                 }}>
                                     <Typography variant="body2">
-                                        <strong>{getTranslation(lang, 'order_id') || 'Order ID'}:</strong> #{selectedOrder.orderId}
+                                        <strong>{getTranslation(lang, 'order_id') || 'Mã đơn hàng'}:</strong> #{selectedOrder.orderId}
                                     </Typography>
                                     <Typography variant="body2">
-                                        <strong>{getTranslation(lang, 'amount') || 'Amount'}:</strong> {formatAmount(selectedOrder.totalAmount)}
+                                        <strong>{getTranslation(lang, 'amount') || 'Số tiền'}:</strong> {formatAmount(selectedOrder.totalAmount)}
                                     </Typography>
                                 </Box>
                             )}
@@ -445,7 +445,7 @@ const MyOrdersPage = () => {
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => setRetryDialogOpen(false)} disabled={isProcessing}>
-                        {getTranslation(lang, 'cancel') || 'Cancel'}
+                        {getTranslation(lang, 'cancel') || 'Hủy'}
                     </Button>
                     {!retrySuccess && (
                         <Button 
@@ -472,7 +472,7 @@ const MyOrdersPage = () => {
                     {orderToCancel && (
                         <Box sx={{ bgcolor: 'background.default', p: 2, borderRadius: 1, mb: 3, border: 1, borderColor: 'divider' }}>
                             <Typography variant="body2">
-                                <strong>{getTranslation(lang, 'order_id') || 'Order ID'}:</strong> #{orderToCancel.orderId}
+                                <strong>{getTranslation(lang, 'order_id') || 'Mã đơn hàng'}:</strong> #{orderToCancel.orderId}
                             </Typography>
                         </Box>
                     )}

@@ -37,6 +37,11 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+
+import java.util.List;
 
 /**
  * Security configuration.
@@ -127,6 +132,7 @@ public class SecurityConfig {
 
     private static final String ADMIN_OFFER_ENDPOINTS = "/api/admin/offers/**";
     private static final String ADMIN_SETTLEMENT_ENDPOINTS = "/api/admin/settlements/**";
+    private static final String ADMIN_COMMISSION_RULE_ENDPOINTS = "/api/admin/commission-rules/**";
 
     /**
      * Jwt Auth Entry Point to handle exceptions.
@@ -166,6 +172,7 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .csrf().disable()
                 .exceptionHandling()
                 .authenticationEntryPoint(jwtAuthEntryPoint)
@@ -204,6 +211,7 @@ public class SecurityConfig {
                         .requestMatchers(ADMIN_PARTNER_ENDPOINTS).hasAuthority(Role.ADMIN.name())
                         .requestMatchers(ADMIN_OFFER_ENDPOINTS).hasAuthority(Role.ADMIN.name())
                         .requestMatchers(ADMIN_SETTLEMENT_ENDPOINTS).hasAuthority(Role.ADMIN.name())
+                        .requestMatchers(ADMIN_COMMISSION_RULE_ENDPOINTS).hasAuthority(Role.ADMIN.name())
                         .requestMatchers(SWAGGER_WHITELIST).permitAll()
                         .requestMatchers(ACTUATOR_WHITELIST).permitAll()
                         .anyRequest()
@@ -240,5 +248,19 @@ public class SecurityConfig {
     @Bean
     public JwtAuthFilter jwtAuthenticationFilter() {
         return new JwtAuthFilter(tokenGenerator, customUserDetailsService);
+    }
+
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration config = new CorsConfiguration();
+        config.setAllowedOrigins(List.of("http://localhost:8082", "http://localhost:8080"));
+        config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"));
+        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
+        config.setAllowCredentials(true);
+        config.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/**", config);
+        return source;
     }
 }

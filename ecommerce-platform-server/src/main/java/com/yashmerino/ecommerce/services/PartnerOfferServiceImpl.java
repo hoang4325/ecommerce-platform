@@ -66,7 +66,8 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
 
         if (offer.getStatus() != PartnerOfferStatus.DRAFT
                 && offer.getStatus() != PartnerOfferStatus.REJECTED
-                && offer.getStatus() != PartnerOfferStatus.SUSPENDED) {
+                && offer.getStatus() != PartnerOfferStatus.SUSPENDED
+                && offer.getStatus() != PartnerOfferStatus.APPROVED) {
             throw new InvalidInputException("cannot_update_in_current_status");
         }
 
@@ -79,8 +80,13 @@ public class PartnerOfferServiceImpl implements PartnerOfferService {
         offer.setCurrency(request.currency() != null ? request.currency() : "USD");
         offer.setOnHandQuantity(request.onHandQuantity());
 
-        if (offer.getStatus() == PartnerOfferStatus.REJECTED || offer.getStatus() == PartnerOfferStatus.SUSPENDED) {
-            offer.setStatus(PartnerOfferStatus.DRAFT);
+        if (offer.getStatus() == PartnerOfferStatus.REJECTED
+                || offer.getStatus() == PartnerOfferStatus.SUSPENDED
+                || offer.getStatus() == PartnerOfferStatus.APPROVED) {
+            offer.setStatus(PartnerOfferStatus.PENDING_REVIEW);
+            offer.setSubmittedAt(LocalDateTime.now());
+            offer.setApprovedAt(null);
+            offer.setApprovedBy(null);
             offer.setRejectionReason(null);
         }
 

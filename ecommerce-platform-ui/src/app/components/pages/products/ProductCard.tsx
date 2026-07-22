@@ -46,6 +46,16 @@ interface ProductCardProps {
   description: string,
 }
 
+const formatVnd = (value: string) => {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return value;
+  return new Intl.NumberFormat('vi-VN', {
+    style: 'currency',
+    currency: 'VND',
+    maximumFractionDigits: 0,
+  }).format(amount);
+};
+
 const ProductCard = ({ id, title, price, categories, description }: ProductCardProps) => {
   const navigate = useNavigate();
   const { showSnackbar } = useSnackbar();
@@ -53,6 +63,12 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
   const roles = useAppSelector(state => state.info.info.roles);
   const lang = useAppSelector(state => state.lang.lang);
   const [photo, setPhoto] = React.useState(NoPhoto);
+  const hasRole = (role: string) => roles.some(userRole => {
+    const roleName = userRole.name?.replace(/^ROLE_/, "");
+    return roleName === role;
+  });
+  const isUser = hasRole("USER");
+  const isSeller = hasRole("SELLER");
 
   const jwt = useAppSelector(state => state.jwt);
 
@@ -66,7 +82,7 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
 
   const handleEditProduct = async () => {
     // @ts-ignore 
-    if (roles[0].name == "USER") {
+    if (isUser) {
       return;
     }
 
@@ -96,8 +112,10 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
   return (
     <Box
         onClick={handleEditProduct}
-        className={roles[0].name == "SELLER" ? "my-product-card" : ""}
+        className={isSeller ? "my-product-card" : ""}
         sx={{
+          width: { xs: '280px', sm: '320px' },
+          maxWidth: '100%',
           backgroundColor: 'background.paper',
           borderRadius: 2,
           boxShadow: 1,
@@ -112,7 +130,7 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
         <Box
           sx={{
             position: 'relative',
-            width: { xs: '280px', sm: '320px' },
+            width: '100%',
             height: '200px',
             overflow: 'hidden',
           }}
@@ -129,7 +147,7 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
               transition: 'transform 0.3s ease-in-out',
             }}
           />
-          {roles[0].name == "USER" && (
+          {isUser && (
             <IconButton
               color="primary"
               aria-label="add to shopping cart"
@@ -168,6 +186,9 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
             sx={{
               textTransform: 'uppercase',
               letterSpacing: 0.5,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
             }}
           >
             {categories && categories.length > 0 ? categories[0].name : getTranslation(lang, "no_category")}
@@ -178,10 +199,9 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
               fontWeight: 600,
               overflow: 'hidden',
               textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
+              whiteSpace: 'nowrap',
             }}
+            title={title}
           >
             {title}
           </Typography>
@@ -192,7 +212,7 @@ const ProductCard = ({ id, title, price, categories, description }: ProductCardP
               fontWeight: 700,
             }}
           >
-            {price + "€"}
+            {formatVnd(price)}
           </Typography>
         </Box>
       </Box>

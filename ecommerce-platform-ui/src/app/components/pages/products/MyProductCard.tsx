@@ -38,6 +38,16 @@ import NoPhoto from "../../../../img/no-photo.jpg";
 import { useNavigate } from 'react-router-dom';
 import ConfirmationDialog from '../../common/ConfirmationDialog';
 
+const formatVnd = (value: string) => {
+    const amount = Number(value);
+    if (!Number.isFinite(amount)) return value;
+    return new Intl.NumberFormat('vi-VN', {
+        style: 'currency',
+        currency: 'VND',
+        maximumFractionDigits: 0,
+    }).format(amount);
+};
+
 const MyProductCard = ({ id, name, price, categories, description }: Product) => {
     const [isDeleted, setIsDeleted] = React.useState<boolean>(false);
     const [deleteDialogOpen, setDeleteDialogOpen] = React.useState<boolean>(false);
@@ -185,7 +195,7 @@ const MyProductCard = ({ id, name, price, categories, description }: Product) =>
                     textAlign: 'right'
                 }}
             >
-                {price + "€"}
+                {formatVnd(price)}
             </Typography>
             
             <IconButton 
@@ -210,10 +220,10 @@ const MyProductCard = ({ id, name, price, categories, description }: Product) =>
         {/* Delete Confirmation Dialog */}
         <ConfirmationDialog
             open={deleteDialogOpen}
-            title={getTranslation(lang, 'confirm_delete') || 'Confirm Delete'}
-            message={getTranslation(lang, 'confirm_delete_product') || 'Are you sure you want to delete this product? This action cannot be undone.'}
-            confirmText={getTranslation(lang, 'delete') || 'Delete'}
-            cancelText={getTranslation(lang, 'cancel') || 'Cancel'}
+            title={getTranslation(lang, 'confirm_delete') || 'Xác nhận xóa'}
+            message={getTranslation(lang, 'confirm_delete_product') || 'Bạn có chắc muốn xóa sản phẩm này? Hành động này không thể hoàn tác.'}
+            confirmText={getTranslation(lang, 'delete') || 'Xóa'}
+            cancelText={getTranslation(lang, 'cancel') || 'Hủy'}
             onConfirm={handleDeleteConfirm}
             onCancel={() => setDeleteDialogOpen(false)}
             loading={isDeleting}

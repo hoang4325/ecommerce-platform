@@ -45,6 +45,31 @@ const Header = () => {
     const navigate = useNavigate();
     const [anchorElUser, setAnchorElUser] = React.useState<null | HTMLElement>(null);
     const [anchorElNav, setAnchorElNav] = React.useState<null | HTMLElement>(null);
+    const hasRole = (role: string) => roles.some(userRole => {
+        const roleName = userRole.name?.replace(/^ROLE_/, "");
+        return roleName === role;
+    });
+    const isUser = hasRole("USER");
+    const isSeller = hasRole("SELLER");
+    const navButtonSx = {
+        color: 'text.primary',
+        borderRadius: 2,
+        px: { md: 1, lg: 1.5 },
+        minWidth: 'auto',
+        whiteSpace: 'nowrap',
+        flexShrink: 0,
+        fontSize: { md: '0.82rem', lg: '0.875rem' },
+        lineHeight: 1.2,
+        transition: 'all 0.2s',
+        '& .MuiButton-startIcon': {
+            mr: { md: 0.5, lg: 0.75 },
+            ml: 0,
+        },
+        '&:hover': {
+            bgcolor: 'primary.main',
+            color: 'white',
+        },
+    };
 
     React.useEffect(() => {
         const getUserPhotoRequest = async () => {
@@ -142,7 +167,7 @@ const Header = () => {
                 color: 'text.primary',
             }}
         >
-            <Container maxWidth="lg" data-testid="header">
+            <Container maxWidth="xl" data-testid="header">
                 <Toolbar
                     disableGutters
                     sx={{
@@ -177,7 +202,7 @@ const Header = () => {
                                 }
                             }}
                         >
-                            {roles[0].name === "USER" && [
+                            {isUser && [
                                 <MenuItem key="my-orders" onClick={handleMyOrders}>
                                     <ReceiptIcon sx={{ mr: 1.5 }} />
                                     <Typography>{getTranslation(lang, "my_orders") || "My Orders"}</Typography>
@@ -187,7 +212,7 @@ const Header = () => {
                                     <Typography>{getTranslation(lang, "my_cart")}</Typography>
                                 </MenuItem>
                             ]}
-                            {roles[0].name === "SELLER" && [
+                            {isSeller && [
                                 <MenuItem key="add-product" onClick={handleAddProduct}>
                                     <AddIcon sx={{ mr: 1.5 }} />
                                     <Typography>{getTranslation(lang, "add_product")}</Typography>
@@ -197,7 +222,7 @@ const Header = () => {
                                     <Typography>{getTranslation(lang, "my_products")}</Typography>
                                 </MenuItem>
                             ]}
-                            {roles[0].name === "USER" && (
+                            {isUser && (
                                 <MenuItem onClick={handleSearch}>
                                     <SearchIcon sx={{ mr: 1.5 }} />
                                     <Typography>{getTranslation(lang, "search")}</Typography>
@@ -207,13 +232,14 @@ const Header = () => {
                     </Box>
 
                     {/* Logo */}
-                    <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: { xs: 1, md: 0 } }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', flexGrow: { xs: 1, md: 0 }, minWidth: 0, maxWidth: { xs: 'calc(100% - 56px)', md: 360, lg: 'none' } }}>
                         <LocalMallIcon
                             sx={{
                                 display: 'flex',
                                 mr: 1,
                                 color: 'primary.main',
                                 fontSize: { xs: 28, md: 32 },
+                                flexShrink: 0,
                             }}
                         />
                         <Typography
@@ -223,10 +249,13 @@ const Header = () => {
                             href="#/products"
                             sx={{
                                 fontWeight: 700,
-                                fontSize: { xs: 20, md: 24 },
-                                letterSpacing: '.1rem',
+                                fontSize: { xs: 18, md: 20, lg: 24 },
+                                letterSpacing: { xs: 0, md: '.04rem', lg: '.1rem' },
                                 color: 'inherit',
                                 textDecoration: 'none',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
                                 '&:hover': {
                                     color: 'primary.main',
                                 },
@@ -242,23 +271,16 @@ const Header = () => {
                             flexGrow: 1,
                             display: { xs: 'none', md: 'flex' },
                             justifyContent: 'center',
-                            gap: 2,
+                            gap: { md: 0.5, lg: 1.25 },
+                            minWidth: 0,
+                            mx: { md: 1, lg: 2 },
                         }}
                     >
                         <Button
                             startIcon={<HomeIcon />}
                             onClick={handleHome}
                             id="home-button"
-                            sx={{
-                                color: 'text.primary',
-                                borderRadius: 2,
-                                px: 2,
-                                transition: 'all 0.2s',
-                                '&:hover': {
-                                    bgcolor: 'primary.main',
-                                    color: 'white',
-                                },
-                            }}
+                            sx={navButtonSx}
                         >
                             {getTranslation(lang, "home")}
                         </Button>
@@ -266,36 +288,18 @@ const Header = () => {
                             startIcon={<AccountCircleIcon />}
                             onClick={handleProfile}
                             id="profile-button"
-                            sx={{
-                                color: 'text.primary',
-                                borderRadius: 2,
-                                px: 2,
-                                transition: 'all 0.2s',
-                                '&:hover': {
-                                    bgcolor: 'primary.main',
-                                    color: 'white',
-                                },
-                            }}
+                            sx={navButtonSx}
                         >
                             {getTranslation(lang, "profile")}
                         </Button>
 
-                        {roles[0].name === "USER" && (
+                        {isUser && (
                             <>
                                 <Button
                                     startIcon={<ShoppingCartIcon />}
                                     onClick={handleMyCart}
                                     id="my-cart-button"
-                                    sx={{
-                                        color: 'text.primary',
-                                        borderRadius: 2,
-                                        px: 2,
-                                        transition: 'all 0.2s',
-                                        '&:hover': {
-                                            bgcolor: 'primary.main',
-                                            color: 'white',
-                                        },
-                                    }}
+                                    sx={navButtonSx}
                                 >
                                     {getTranslation(lang, "my_cart")}
                                 </Button>
@@ -304,38 +308,20 @@ const Header = () => {
                                     startIcon={<ReceiptIcon />}
                                     onClick={handleMyOrders}
                                     id="my-orders-button"
-                                    sx={{
-                                        color: 'text.primary',
-                                        borderRadius: 2,
-                                        px: 2,
-                                        transition: 'all 0.2s',
-                                        '&:hover': {
-                                            bgcolor: 'primary.main',
-                                            color: 'white',
-                                        },
-                                    }}
+                                    sx={navButtonSx}
                                 >
                                     {getTranslation(lang, "my_orders") || "My Orders"}
                                 </Button>
                             </>
                         )}
 
-                        {roles[0].name === "SELLER" && (
+                        {isSeller && (
                             <>
                                 <Button
                                     startIcon={<AddIcon />}
                                     onClick={handleAddProduct}
                                     id="add-product-button"
-                                    sx={{
-                                        color: 'text.primary',
-                                        borderRadius: 2,
-                                        px: 2,
-                                        transition: 'all 0.2s',
-                                        '&:hover': {
-                                            bgcolor: 'primary.main',
-                                            color: 'white',
-                                        },
-                                    }}
+                                    sx={navButtonSx}
                                 >
                                     {getTranslation(lang, "add_product")}
                                 </Button>
@@ -343,36 +329,18 @@ const Header = () => {
                                     startIcon={<SellIcon />}
                                     onClick={handleMyProducts}
                                     id="my-products-button"
-                                    sx={{
-                                        color: 'text.primary',
-                                        borderRadius: 2,
-                                        px: 2,
-                                        transition: 'all 0.2s',
-                                        '&:hover': {
-                                            bgcolor: 'primary.main',
-                                            color: 'white',
-                                        },
-                                    }}
+                                    sx={navButtonSx}
                                 >
                                     {getTranslation(lang, "my_products")}
                                 </Button>
                             </>
                         )}
 
-                        {roles[0].name === "USER" && (
+                        {isUser && (
                             <Button
                                 startIcon={<SearchIcon />}
                                 onClick={handleSearch}
-                                sx={{
-                                    color: 'text.primary',
-                                    borderRadius: 2,
-                                    px: 2,
-                                    transition: 'all 0.2s',
-                                    '&:hover': {
-                                        bgcolor: 'primary.main',
-                                        color: 'white',
-                                    },
-                                }}
+                                sx={navButtonSx}
                             >
                                 {getTranslation(lang, "search")}
                             </Button>
@@ -435,6 +403,7 @@ const Header = () => {
                                     onChange={(value) => handleLanguageSelection(value)}
                                     sx={{ mb: 2 }}
                                 >
+                                    <MenuItem value={Lang.VI.toString()}>{getTranslation(lang, "vietnamese")}</MenuItem>
                                     <MenuItem value={Lang.ENG.toString()}>{getTranslation(lang, "english")}</MenuItem>
                                     <MenuItem value={Lang.RU.toString()}>{getTranslation(lang, "russian")}</MenuItem>
                                     <MenuItem value={Lang.RO.toString()}>{getTranslation(lang, "romanian")}</MenuItem>

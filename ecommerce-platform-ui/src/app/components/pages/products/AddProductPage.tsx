@@ -70,6 +70,7 @@ export interface Category {
 const AddProductPage = () => {
     const lang = useAppSelector(state => state.lang.lang);
     const roles = useAppSelector(state => state.info.info.roles);
+    const isSeller = roles.some(role => role.name?.replace(/^ROLE_/, '') === 'SELLER');
 
     const [name, setName] = React.useState("");
     const [description, setDescription] = React.useState("");
@@ -177,8 +178,7 @@ const AddProductPage = () => {
                     </Typography>
                 </Box>
 
-                {// @ts-ignore 
-                    roles[0].name === "SELLER" ? (
+                {isSeller ? (
                         <Paper 
                             elevation={2} 
                             sx={{ 

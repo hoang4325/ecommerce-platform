@@ -1,0 +1,27 @@
+[    3386ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:21550
+[    3644ms] [WARNING] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428
+[    3644ms] [WARNING] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428
+[    3856ms] [ERROR] Failed to load resource: the server responded with a status of 404 (Not Found) @ http://localhost:5173/favicon.ico:0
+[   20038ms] [ERROR] Access to fetch at 'http://localhost:8081/api/auth/login' from origin 'http://localhost:5173' has been blocked by CORS policy: Response to preflight request doesn't pass access control check: No 'Access-Control-Allow-Origin' header is present on the requested resource. @ http://localhost:5173/#/login:0
+[   20039ms] [ERROR] Failed to load resource: net::ERR_FAILED @ http://localhost:8081/api/auth/login:0
+[   20042ms] TypeError: Failed to fetch
+    at Module.login (http://localhost:5173/src/app/api/AuthRequest.ts:21:26)
+    at handleSubmit (http://localhost:5173/src/app/components/pages/auth/LoginPage.tsx?t=1784454228405:46:40)
+    at onSubmit (http://localhost:5173/src/app/components/pages/auth/UserInputFields.tsx?t=1784454228405:114:81)
+    at HTMLUnknownElement.callCallback2 (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:3674:22)
+    at Object.invokeGuardedCallbackDev (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:3699:24)
+    at invokeGuardedCallback (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:3733:39)
+    at invokeGuardedCallbackAndCatchFirstError (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:3736:33)
+    at executeDispatch (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:7014:11)
+    at processDispatchQueueItemsInOrder (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:7034:15)
+    at processDispatchQueue (http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:7043:13)
+[ 6868562ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:559
+[ 6868716ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://js.stripe.com/v3/:0
+[ 6869006ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:21550
+[ 6869129ms] [WARNING] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428
+[ 6869130ms] [WARNING] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428
+[21901176ms] [LOG] [vite] server connection lost. Polling for restart... @ http://localhost:5173/@vite/client:559
+[21901559ms] [ERROR] Failed to load resource: net::ERR_NAME_NOT_RESOLVED @ https://js.stripe.com/v3/:0
+[21901732ms] [INFO] %cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold @ http://localhost:5173/node_modules/.vite/deps/chunk-WRD5HZVH.js?v=0ad75783:21550
+[21901793ms] [WARNING] ⚠️ React Router Future Flag Warning: React Router will begin wrapping state updates in `React.startTransition` in v7. You can use the `v7_startTransition` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_starttransition. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428
+[21901793ms] [WARNING] ⚠️ React Router Future Flag Warning: Relative route resolution within Splat routes is changing in v7. You can use the `v7_relativeSplatPath` future flag to opt-in early. For more information, see https://reactrouter.com/v6/upgrading/future#v7_relativesplatpath. @ http://localhost:5173/node_modules/.vite/deps/chunk-GNUP7FEB.js?v=0ad75783:4428

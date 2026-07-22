@@ -5,6 +5,7 @@ import com.yashmerino.ecommerce.model.order.PartnerOrderStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 public record PartnerOrderResponse(
         Long id,
@@ -28,9 +29,14 @@ public record PartnerOrderResponse(
         LocalDateTime deliveredAt,
         LocalDateTime cancelledAt,
         String cancelReason,
-        LocalDateTime createdAt) {
+        LocalDateTime createdAt,
+        List<PartnerOrderItemResponse> items) {
 
     public static PartnerOrderResponse from(PartnerOrder po) {
+        return from(po, List.of());
+    }
+
+    public static PartnerOrderResponse from(PartnerOrder po, List<PartnerOrderItemResponse> items) {
         return new PartnerOrderResponse(
                 po.getId(), po.getOrder().getId(), po.getPartner().getId(),
                 po.getStatus(), po.getSubtotal(), po.getDiscountAllocation(),
@@ -40,6 +46,6 @@ public record PartnerOrderResponse(
                 po.getAcceptedAt(), po.getRejectedAt(), po.getRejectionReason(),
                 po.getPackedAt(), po.getReadyToShipAt(), po.getShippedAt(),
                 po.getDeliveredAt(), po.getCancelledAt(), po.getCancelReason(),
-                po.getCreatedAt());
+                po.getCreatedAt(), items);
     }
 }

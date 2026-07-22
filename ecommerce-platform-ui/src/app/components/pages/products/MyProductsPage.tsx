@@ -45,6 +45,7 @@ const ProductsContainer = () => {
   const roles = useAppSelector((state) => state.info.info.roles);
   const lang = useAppSelector((state) => state.lang.lang);
   const username = useAppSelector((state) => state.username.sub);
+  const isSeller = roles.some(role => role.name?.replace(/^ROLE_/, '') === 'SELLER');
 
   const [page, setPage] = React.useState(0);
   const [pagination, setPagination] = React.useState<PaginatedDTO<Product>>({
@@ -84,7 +85,7 @@ const ProductsContainer = () => {
             {getTranslation(lang, 'my_products')}
           </Typography>
 
-          {roles[0]?.name === 'SELLER' && (
+          {isSeller && (
             <Button
               variant="contained"
               color="primary"
@@ -97,7 +98,7 @@ const ProductsContainer = () => {
           )}
         </Box>
 
-        {roles[0]?.name === 'SELLER' ? (
+        {isSeller ? (
           <Paper elevation={2} sx={{ borderRadius: 2, overflow: 'hidden', bgcolor: 'background.paper', minHeight: '70vh' }}>
             {pagination.data.length > 0 ? (
               <Box sx={{ overflowY: 'auto', p: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>

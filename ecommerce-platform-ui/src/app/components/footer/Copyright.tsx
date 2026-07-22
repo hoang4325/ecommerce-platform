@@ -90,7 +90,7 @@ const Copyright = (props: any) => {
                                     maxWidth: 300,
                                 }}
                             >
-                                Your one-stop shop for all your needs. Quality products, great prices, and excellent service.
+                                Cửa hàng một điểm đến cho mọi nhu cầu của bạn. Sản phẩm chất lượng, giá tốt, dịch vụ tuyệt vời.
                             </Typography>
                         </Box>
                     </Grid>

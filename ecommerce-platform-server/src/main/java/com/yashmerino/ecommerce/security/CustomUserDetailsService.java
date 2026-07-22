@@ -37,6 +37,7 @@ import org.springframework.stereotype.Service;
 import java.util.Collection;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Custom user details service.
@@ -79,6 +80,13 @@ public class CustomUserDetailsService implements UserDetailsService {
      * @return a <code>Collection</code> of <code>GrantedAuthority</code>.
      */
     private Collection<GrantedAuthority> mapRolesToAuthorities(final Set<Role> roles) {
-        return roles.stream().map(role -> new SimpleGrantedAuthority(role.getName())).collect(Collectors.toSet());
+        return roles.stream()
+                .flatMap(role -> {
+                    String roleName = role.getName();
+                    String normalizedRoleName = roleName.replaceFirst("^ROLE_", "");
+                    return Stream.of(roleName, normalizedRoleName);
+                })
+                .map(SimpleGrantedAuthority::new)
+                .collect(Collectors.toSet());
     }
 }

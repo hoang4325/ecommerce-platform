@@ -49,8 +49,8 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
     open,
     title,
     message,
-    confirmText = 'Confirm',
-    cancelText = 'Cancel',
+    confirmText = 'Xác nhận',
+    cancelText = 'Hủy',
     onConfirm,
     onCancel,
     loading = false,
@@ -82,7 +82,7 @@ const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({
                     disabled={loading}
                     startIcon={loading ? <CircularProgress size={20} /> : null}
                 >
-                    {loading ? 'Processing...' : confirmText}
+                    {loading ? 'Đang xử lý...' : confirmText}
                 </Button>
             </DialogActions>
         </Dialog>
